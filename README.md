@@ -11,12 +11,14 @@ No database, no tagging service, nothing to import. Put music in the folder and
 it is in the library.
 
 ```
-╭─ Artists ──────╬─ Albums ───────────────╬─ Tracks ─────────────────╮
-│ Bob Dylan      │ 1984 Red Roses for Me  │ 01 Transmetropolitan     │
-│>The Pogues     │>1985 Rum, Sodomy & the │>02 The Old Main Drag     │
-│ Frank Zappa    │ 1988 If I Should Fall  │ 03 Wild Cats of Kilkenny │
-│ Jeff Buckley   │ 1989 Peace and Love    │ 04 I'm a Man You Don't   │
-╰────────────────┴────────────────────────┴──────────────────────────╯
+╭─ Artists ─────╬─ Albums ──────────╬─ Tracks ───────────╮╭─ Lyrics ────────╮
+│ Bob Dylan     │ 1984 Red Roses fo │ 01 Transmetropolit ││ The Old Main    │
+│>The Pogues    │>1985 Rum, Sodomy  │>02 The Old Main Dr ││ Drag            │
+│ Frank Zappa   │ 1988 If I Should  │ 03 Wild Cats of Ki ││ The Pogues      │
+│ Jeff Buckley  │ 1989 Peace and Lo │ 04 I'm a Man You D ││                 │
+│ Johnny Cash   │ 1990 Hell's Ditch │ 05 Metropolis      ││ When I first    │
+│ Led Zeppelin  │ 1993 Waiting for  │ 06 Thousands Are S ││ came to London  │
+╰───────────────┴───────────────────┴────────────────────╯╰─────────────────╯
 ▂▅▇▃▂▆█▅▃▁▄▇▆▂▅█▃▁▄▆▇▃▂▅▆█▄▂▁▃▅▇▆▄▂▁▃▅▇█▆▄▂▁▃▄▆▇▅▃▁▂▄
 ▶ The Old Main Drag — The Pogues (FLAC)
   1:12 ━━━━━━━━╸───────────────── 3:32   vol 80%  shuffle
@@ -171,6 +173,24 @@ download.
 
 Playing from here imports nothing and changes nothing. The rest of the folder
 is queued behind whatever you pick, so an album plays through.
+
+---
+
+## Lyrics (`i`)
+
+The right-hand column follows your cursor. If the track has lyrics they are
+shown; if it has none, you get what the file actually is instead — bitrate,
+sample rate, bit depth, size, where it lives.
+
+Lyrics are read from an `.lrc` file beside the track (or in a `Lyrics/`
+subfolder), and failing that from the tags inside the file — `USLT` for MP3,
+`LYRICS` for FLAC and Vorbis, `©lyr` for MP4. Timestamps in synced `.lrc`
+files are stripped; nothing scrolls in time with the music.
+
+`J` and `K` scroll a long set of lyrics. `i` hides the pane.
+
+Both lookups are cached against each file's size and mtime, so moving down a
+track list stays instant.
 
 ---
 

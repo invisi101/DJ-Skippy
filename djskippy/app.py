@@ -24,6 +24,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Input
 
+from . import details as details_mod
 from .cava import CavaVisualiser, clean_stale_configs
 from .config import Config, load_state, save_state
 from .library import AUDIO_SUFFIXES, Library, Track
@@ -166,6 +167,81 @@ class ListPane(Widget):
             out.append("\n")
 
         return out
+
+
+class DetailPane(Widget):
+    """Lyrics for whatever the cursor is on, or the track's details.
+
+    Lyrics are what you usually want while a song is playing, and most files
+    have them. When they do not, the space is better spent on what the file
+    actually is than on an apology.
+    """
+
+    DEFAULT_CSS = """
+    DetailPane {
+        border: round $panel-lighten-1;
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.track: Any = None
+        self.lyric_offset = 0
+
+    def set_track(self, track: Any) -> None:
+        if track is self.track:
+            return
+        path = getattr(track, "path", None)
+        if path and path == getattr(self.track, "path", None):
+            return
+        self.track = track
+        self.lyric_offset = 0
+        self.refresh()
+
+    def scroll_by(self, delta: int) -> None:
+        self.lyric_offset = max(0, self.lyric_offset + delta)
+        self.refresh()
+
+    def render(self) -> Text:
+        width = max(12, self.size.width - 4)
+        height = max(1, self.size.height - 2)
+        text = Text()
+
+        if self.track is None:
+            return Text("\n  nothing selected", style="bright_black")
+
+        lyrics = details_mod.lyrics_for(self.track)
+        if lyrics:
+            text.append(f"{self.track.title}\n", style="bold")
+            text.append(f"{self.track.artist}\n\n", style="cyan")
+            lines: list[str] = []
+            for line in lyrics.splitlines():
+                if not line.strip():
+                    lines.append("")
+                    continue
+                # Wrap rather than clip: a lost lyric line is worse than a
+                # ragged edge.
+                while len(line) > width:
+                    cut = line.rfind(" ", 0, width)
+                    cut = cut if cut > width // 2 else width
+                    lines.append(line[:cut])
+                    line = line[cut:].lstrip()
+                lines.append(line)
+
+            body = height - 3
+            visible = lines[self.lyric_offset : self.lyric_offset + body]
+            for line in visible:
+                text.append(line + "\n")
+            if len(lines) > self.lyric_offset + body:
+                text.append("  ⌄ more", style="bright_black")
+            return text
+
+        text.append("No lyrics\n\n", style="bright_black")
+        for key, value in details_mod.details_for(self.track):
+            text.append(f"{key:<13}", style="bright_black")
+            text.append(f"{str(value)[: width - 13]}\n")
+        return text
 
 
 class CavaPane(Widget):
@@ -374,6 +450,7 @@ DJ-Skippy — keys
     d             remove from playlist / queue
 
   TOGGLES
+    i             lyrics pane     J / K   scroll the lyrics
     V             visualiser      w   web player
     ?             this help       q   quit
 
@@ -406,7 +483,8 @@ class DJSkippy(App):
     Screen { layers: base overlay; }
     #columns { height: 1fr; }
     #artists { width: 26; }
-    #albums  { width: 48; }
+    #albums  { width: 40; }
+    #detail  { width: 46; }
     #tracks  { width: 1fr; }
     #cmdline { dock: bottom; display: none; }
     #cmdline.visible { display: block; }
@@ -454,6 +532,7 @@ class DJSkippy(App):
                 yield ListPane("Artists", id="artists")
                 yield ListPane("Albums", id="albums")
                 yield ListPane("Tracks", id="tracks")
+                yield DetailPane(id="detail")
             yield CavaPane(self.visualiser, id="cava")
             yield NowPlaying(self.player, id="now")
             yield StatusLine(id="status")
@@ -468,6 +547,7 @@ class DJSkippy(App):
             self.query_one("#albums", ListPane),
             self.query_one("#tracks", ListPane),
         ]
+        self._detail = self.query_one("#detail", DetailPane)
         self._cava = self.query_one("#cava", CavaPane)
         self._status = self.query_one("#status", StatusLine)
         self._now = self.query_one("#now", NowPlaying)
@@ -711,6 +791,7 @@ class DJSkippy(App):
             )
         self._panes[2].set_items(labels, tracks)
         self._sync_marker()
+        self._sync_detail()
 
     def _sync_marker(self) -> None:
         """Highlight the playing track if it is on screen."""
@@ -753,6 +834,18 @@ class DJSkippy(App):
                     break
         self.focus_column = column
         self._update_focus()
+
+    def _sync_detail(self) -> None:
+        """Point the detail pane at whatever the cursor is on.
+
+        Falls back to what is playing, so the pane is useful while you are
+        looking at something else.
+        """
+        selected = self._panes[2].selected
+        if isinstance(selected, Track):
+            self._detail.set_track(selected)
+        elif self.player.state.track is not None:
+            self._detail.set_track(self.player.state.track)
 
     def _update_focus(self) -> None:
         for index, pane in enumerate(self._panes):
@@ -800,6 +893,8 @@ class DJSkippy(App):
     def _tick(self) -> None:
         self._now.refresh()
         self._sync_marker()
+        if self._panes[2].selected is None and self.player.state.track:
+            self._detail.set_track(self.player.state.track)
 
     def _tick_cava(self) -> None:
         # Only occupy screen space when there is actually something to draw.
@@ -1234,6 +1329,15 @@ class DJSkippy(App):
             self._set_view(View.PLAYLISTS)
 
         # -- toggles
+        elif key == "i":
+            self._detail.display = not self._detail.display
+            self.notify_status(
+                f"lyrics pane {'on' if self._detail.display else 'off'}"
+            )
+        elif key == "J":
+            self._detail.scroll_by(5)
+        elif key == "K":
+            self._detail.scroll_by(-5)
         elif key == "V":
             await self._toggle_visualiser()
         elif key == "w":
@@ -1254,8 +1358,10 @@ class DJSkippy(App):
             self._jump_match(-1)
 
     def _after_move(self) -> None:
+        self._sync_detail()
         if self.view is View.PLAYLISTS and self.focus_column == 1:
             self._render_playlist_songs()
+            self._sync_detail()
             return
         if self.view is View.LIBRARY:
             if self.focus_column == 0:
