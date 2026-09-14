@@ -801,6 +801,10 @@ class DJSkippy(App):
             parts.append(self.web.url)
         if self.mpris is not None and self.mpris.active:
             parts.append("mpris")
+        if self.beets_cmd.running:
+            parts.append(f"running {self.beets_cmd.current}")
+        elif self.tagger.running:
+            parts.append("importing")
         if self.watcher is not None and self.watcher.running:
             parts.append(self.watcher.status_line())
         if self.review_queue:
@@ -1692,9 +1696,16 @@ class DJSkippy(App):
         self._panes[2].set_items(lines, meta)
 
     def _import_everything(self) -> None:
-        """I — tag every album folder that is not yet in the library."""
+        """i — tag every album folder that is not yet in the library."""
         if self.tagger.running:
             self.notify_status("an import is already running")
+            return
+        # Both write to the same SQLite database. Two writers is how a
+        # library gets corrupted, so only one beets operation at a time.
+        if self.beets_cmd.running:
+            self.notify_status(
+                f"{self.beets_cmd.current} is running — wait for it to finish"
+            )
             return
 
         self._unimported = find_unimported_albums(
@@ -1937,6 +1948,11 @@ class DJSkippy(App):
     def _start_tagging(self, path: str | None = None) -> None:
         if self.tagger.running:
             self.notify_status("tagger already running")
+            return
+        if self.beets_cmd.running:
+            self.notify_status(
+                f"{self.beets_cmd.current} is running — wait for it to finish"
+            )
             return
 
         target = path
