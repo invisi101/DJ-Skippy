@@ -594,6 +594,7 @@ class DJSkippy(App):
             rewind_offset=self.cfg.playback.rewind_offset,
             continue_playback=self.cfg.playback.continue_playback,
             on_change=self._on_player_change,
+            on_error=self._on_player_error,
         )
         self.visualiser = CavaVisualiser(
             bars=40 if self.cfg.visualiser.bars == "auto" else int(self.cfg.visualiser.bars),
@@ -1004,6 +1005,13 @@ class DJSkippy(App):
         """Called from mpv's thread - must hop back to the UI thread."""
         try:
             self.call_from_thread(self._on_player_change_ui)
+        except Exception:
+            pass
+
+    def _on_player_error(self, message: str) -> None:
+        """Playback failure, raised from mpv's thread."""
+        try:
+            self.call_from_thread(self.notify_status, message)
         except Exception:
             pass
 

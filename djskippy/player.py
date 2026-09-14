@@ -49,6 +49,7 @@ class Player:
         rewind_offset: int = 5,
         continue_playback: bool = True,
         on_change: Callable[[], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         import mpv
 
@@ -56,6 +57,7 @@ class Player:
         self.rewind_offset = rewind_offset
         self.continue_playback = continue_playback
         self._on_change = on_change or (lambda: None)
+        self._on_error = on_error or (lambda msg: None)
 
         self._playlist: list[Track] = []
         self._queue: list[Track] = []
@@ -63,6 +65,10 @@ class Player:
         self._history: list[int] = []
         self._lock = threading.RLock()
         self._advancing = False
+        #: Consecutive unplayable tracks, so a playlist of broken files does
+        #: not spin through itself at full speed.
+        self._failures = 0
+        self.failed_paths: list[str] = []
 
         self._mpv = mpv.MPV(
             video=False,
@@ -83,6 +89,9 @@ class Player:
         @self._mpv.property_observer("time-pos")
         def _observe_position(_name, value):  # pragma: no cover - callback
             if value is not None:
+                if value > 0.5:
+                    # Real playback, so whatever came before is forgiven.
+                    self._failures = 0
                 self.state.position = float(value)
                 self._on_change()
 
@@ -94,12 +103,40 @@ class Player:
 
         @self._mpv.event_callback("end-file")
         def _on_end(event):  # pragma: no cover - callback
-            reason = getattr(event, "data", None)
-            reason = getattr(reason, "reason", None) or ""
-            # "eof" means the track finished on its own; anything else means we
-            # (or an error) stopped it, and we must not double-advance.
-            if str(reason).endswith("eof") or str(reason) == "MPV_END_FILE_REASON_EOF":
+            # reason is an *integer* from MpvEventEndFile, not a string.
+            # Matching it as text silently matched nothing, which meant a
+            # track never advanced at its end and a broken file stalled the
+            # playlist forever.
+            data = getattr(event, "data", None)
+            reason = getattr(data, "reason", None)
+
+            if reason == mpv.MpvEventEndFile.EOF:
+                self._failures = 0
                 self._handle_track_end()
+            elif reason == mpv.MpvEventEndFile.ERROR:
+                # Unplayable: corrupt file, unsupported codec, dead mount.
+                # Skipping is the only useful response.
+                self._note_failure()
+            # ABORTED, QUIT and REDIRECT are our own doing or mpv's, and must
+            # not trigger an advance.
+
+    def _note_failure(self) -> None:
+        """A track could not be played. Skip on, unless everything is failing."""
+        failed = self.state.track
+        if failed is not None:
+            if failed.path not in self.failed_paths:
+                self.failed_paths.append(failed.path)
+            self._on_error(f"cannot play {failed.title} — skipping")
+
+        self._failures += 1
+        limit = max(3, len(self._playlist) + len(self._queue))
+        if self._failures > limit:
+            # Everything is broken; stop rather than race through the list.
+            self._failures = 0
+            self._on_error("nothing in this playlist can be played")
+            self.stop()
+            return
+        self._handle_track_end()
 
     # -- ReplayGain ------------------------------------------------------
 
@@ -180,6 +217,10 @@ class Player:
     def play_track(self, track: Track) -> None:
         """Play one track immediately without disturbing the playlist."""
         if not track.exists:
+            # Missing file: treat it exactly like an unplayable one, or the
+            # playlist stalls here instead of moving on.
+            self.state.track = track
+            self._note_failure()
             return
         self.state.track = track
         self.state.playing = True
