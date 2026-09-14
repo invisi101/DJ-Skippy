@@ -198,14 +198,17 @@ class ListPane(Widget):
         width = max(4, self.size.width - 4)
         self._clamp()
 
+        # One Text with no base style. Constructing it as Text(..., style=...)
+        # and appending to it applies that style to *everything* appended
+        # afterwards, which turned every row of the focused pane blue.
+        out = Text()
+
         count = f" {len(self.items)}" if self.items else ""
-        header = Text(
-            f"{self.pane_title}{count}".ljust(width)[:width],
+        out.append(
+            f"{self.pane_title}{count}".ljust(width)[:width] + "\n",
             style="bold blue" if self.is_active else "bold bright_black",
         )
-        header.append("\n")
 
-        body = Text()
         visible = self.items[self.scroll_top : self.scroll_top + height]
         for row, label in enumerate(visible):
             index = self.scroll_top + row
@@ -215,21 +218,22 @@ class ListPane(Widget):
 
             prefix = "▶ " if is_playing else "  "
             if is_cursor and self.is_active:
-                style = "reverse bold"
+                # Reverse over unstyled text stays readable whatever the
+                # terminal theme; reverse over a coloured foreground does not.
+                style = "reverse"
             elif is_cursor:
-                style = "reverse bright_black"
+                style = "bold"
             elif is_playing:
                 style = "bold green"
             else:
                 style = ""
-            body.append(prefix + text + "\n", style=style)
+            out.append(prefix + text + "\n", style=style)
 
         # Pad so the border does not jump around on short lists.
         for _ in range(height - len(visible)):
-            body.append("\n")
+            out.append("\n")
 
-        header.append(body)
-        return header
+        return out
 
 
 class ArtPane(Widget):
@@ -297,7 +301,7 @@ class CavaPane(Widget):
     """The visualiser strip."""
 
     DEFAULT_CSS = """
-    CavaPane { height: 5; }
+    CavaPane { height: 5; display: none; }
     """
 
     def __init__(self, visualiser: CavaVisualiser, **kwargs: Any) -> None:
@@ -504,8 +508,8 @@ class DJSkippy(App):
     CSS = """
     Screen { layers: base overlay; }
     #columns { height: 1fr; }
-    #artists { width: 24; }
-    #albums  { width: 34; }
+    #artists { width: 26; }
+    #albums  { width: 44; }
     #tracks  { width: 1fr; }
     #art     { width: 34; }
     #cmdline { dock: bottom; display: none; }
@@ -550,6 +554,7 @@ class DJSkippy(App):
         self._mb_offline = False
         self._retry_counts: dict[str, int] = {}
         self._picking_playlist = False
+        self._browser_dir = self.cfg.library.music_dir
         self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
         self._unimported: list = []
         self._bulk_running = False
@@ -869,7 +874,13 @@ class DJSkippy(App):
             self._art.set_track(self.player.state.track.path)
 
     def _tick_cava(self) -> None:
-        if self._cava.enabled and self.visualiser.running:
+        # Only occupy screen space when there is actually something to draw.
+        should_show = self._cava.enabled and (
+            self.visualiser.running or self.visualiser.error is not None
+        )
+        if self._cava.display != should_show:
+            self._cava.display = should_show
+        if should_show:
             self._cava.refresh()
 
     def _on_player_change(self) -> None:
@@ -1006,6 +1017,9 @@ class DJSkippy(App):
             pane.page(1); self._after_move()
         elif key == "ctrl+u":
             pane.page(-1); self._after_move()
+        elif key == "h" and self.view is View.BROWSER:
+            self._load_browser(self._browser_dir.parent)
+            self.notify_status(f"{self._browser_dir}")
         elif key in ("h", "left") and self.view is View.LIBRARY:
             if key == "h" or not self.player.state.track:
                 self.focus_column = max(0, self.focus_column - 1)
@@ -1634,6 +1648,7 @@ class DJSkippy(App):
             return
         self.player.set_playlist(tracks, 0)
         self._picking_playlist = False
+        self._browser_dir = self.cfg.library.music_dir
         self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
         self._unimported: list = []
         self._bulk_running = False
@@ -1725,8 +1740,14 @@ class DJSkippy(App):
             await self.visualiser.start()
         else:
             await self.visualiser.stop()
+        self._cava.display = want and (
+            self.visualiser.running or self.visualiser.error is not None
+        )
         self._cava.refresh()
-        self.notify_status(f"visualiser {'on' if want else 'off'}")
+        if want and not self.visualiser.running:
+            self.notify_status(f"visualiser: {self.visualiser.error or 'failed to start'}")
+        else:
+            self.notify_status(f"visualiser {'on' if want else 'off'}")
 
     def _toggle_web(self) -> None:
         if self.web is not None and self.web.running:

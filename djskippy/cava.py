@@ -190,9 +190,19 @@ class CavaVisualiser:
                     self.levels = [min(1.0, v / MAX_RANGE) for v in values]
         except asyncio.CancelledError:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            self.error = f"visualiser read failed: {type(exc).__name__}"
         finally:
+            if self.running:
+                # The loop ended while we still believed cava was running,
+                # so the process went away underneath us. Say so rather than
+                # silently showing an empty strip.
+                code = getattr(self._process, "returncode", None)
+                if self.error is None:
+                    self.error = (
+                        f"cava exited (code {code})" if code is not None
+                        else "cava stopped unexpectedly"
+                    )
             self.running = False
 
     async def set_bars(self, bars: int) -> None:

@@ -105,7 +105,9 @@ scans `~/Music` directly, so it works before anything has been imported.
 
 1. **`j`/`k`** move up and down, **`l`** goes deeper (artist → album → track),
    **`h`** comes back.
-2. **`Enter`** on a track plays that album from that track.
+2. **`Enter`** on a track plays that album from that track. `Enter` in the
+   Artist or Album column just moves right — it only plays from the Tracks
+   column.
 3. **`space`** pauses.
 4. **`?`** shows every key.
 
@@ -118,7 +120,7 @@ scans `~/Music` directly, so it works before anything has been imported.
 | Key | Action |
 |---|---|
 | `j` `k` | down / up |
-| `h` `l` | left / right between columns |
+| `h` `l` | left / right between columns (in Browser, `h` goes up a folder) |
 | `g g` | jump to top |
 | `G` | jump to bottom |
 | `ctrl+d` `ctrl+u` | half page down / up |
