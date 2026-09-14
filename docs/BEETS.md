@@ -373,6 +373,34 @@ curl -s 'https://musicbrainz.org/ws/2/release/?query=release:"Red Roses For Me"&
 If it returns `{"error": "The MusicBrainz web server is currently busy..."}`,
 wait and try again — nothing is wrong with your setup.
 
+**Sample more than once before concluding anything.** Measured during
+development, the API was answering roughly 50% of requests — usable, but a
+single failed request proves nothing:
+
+```bash
+for i in $(seq 1 10); do
+  curl -s -m 15 -A 'beets/2.14 ( your@email )' \
+    'https://musicbrainz.org/ws/2/release/?query=release:%22Abbey+Road%22&fmt=json&limit=1' \
+    | grep -q '"releases"' && printf . || printf X
+  sleep 1.2
+done; echo
+```
+
+Dots are successes, X's are 503s. Half X's is normal on a bad day and retries
+will still get you there.
+
+**There is no API key.** MusicBrainz is free and open; no credential exists
+that avoids the 503s, and no other service (Jellyfin, Plex, Last.fm) can supply
+one. beets cannot be pointed at a mirror either — the hostname is not
+configurable in 2.14.
+
+**beets already retries far more than you would think.** Its HTTP session is
+configured with `Retry(total=6, backoff_factor=0.5)` including 503 in the
+`status_forcelist`, and a 0.25 req/sec rate limiter. So "no matching release
+found" during an outage means it already tried six times. That is also why
+imports feel slow: one request every four seconds is beets being a good
+citizen, not a bug.
+
 ---
 
 ## Recipes

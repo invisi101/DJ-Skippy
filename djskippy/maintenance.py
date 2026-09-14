@@ -125,15 +125,13 @@ def find_unimported_albums(
     return out
 
 
-def check_musicbrainz(timeout: float = 12.0) -> tuple[bool, str]:
-    """Is MusicBrainz answering right now?
+#: MusicBrainz asks that clients identify themselves with contact details.
+#: https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting
+USER_AGENT = "DJ-Skippy/1.0 ( https://github.com/invisi101/DJ-Skippy )"
 
-    Returns (healthy, message). Their server returns HTTP 503 with a "currently
-    busy" body under load, and beets surfaces that as "no matching release
-    found" - indistinguishable, from the outside, from an album that genuinely
-    is not in the database. Checking directly lets us tell the user the truth
-    instead of quietly filing half their library under "needs review".
-    """
+
+def _probe_musicbrainz(timeout: float) -> tuple[bool, str]:
+    """One request. True if MusicBrainz answered with real data."""
     import json
     import urllib.error
     import urllib.request
@@ -143,24 +141,63 @@ def check_musicbrainz(timeout: float = 12.0) -> tuple[bool, str]:
         "?query=release:%22Abbey%20Road%22%20AND%20artist:%22The%20Beatles%22"
         "&fmt=json&limit=1"
     )
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "DJ-Skippy/1.0 (health check)"}
-    )
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", "replace")
-        data = json.loads(body)
+            data = json.loads(response.read().decode("utf-8", "replace"))
+        if data.get("releases"):
+            return True, "ok"
         if "error" in data:
             return False, str(data["error"])
-        if data.get("releases"):
-            return True, "MusicBrainz is responding"
-        return False, "MusicBrainz returned no results for a known album"
+        return False, "no results for a known album"
     except urllib.error.HTTPError as exc:
-        if exc.code == 503:
-            return False, "MusicBrainz is rate-limiting or overloaded (503)"
-        return False, f"MusicBrainz returned HTTP {exc.code}"
+        return False, f"HTTP {exc.code}"
     except Exception as exc:
-        return False, f"cannot reach MusicBrainz: {type(exc).__name__}"
+        return False, f"{type(exc).__name__}"
+
+
+def check_musicbrainz(
+    timeout: float = 12.0, samples: int = 4, required: int = 1
+) -> tuple[bool, str]:
+    """Is MusicBrainz usable right now?
+
+    Returns (healthy, message).
+
+    Sampling several times matters. Under load MusicBrainz returns HTTP 503
+    for a large fraction of requests - measured at ~50% during development -
+    while still being perfectly usable if you retry. A single failed request
+    therefore proves nothing, and treating it as "down" would refuse to start
+    imports on a service that is merely busy.
+
+    So: healthy means *at least `required` of `samples` succeeded*, not "the
+    first one worked". Requests are spaced to respect their 1/second limit.
+    """
+    import time as _time
+
+    successes = 0
+    last_error = "no response"
+    for attempt in range(samples):
+        ok, detail = _probe_musicbrainz(timeout)
+        if ok:
+            successes += 1
+            if successes >= required:
+                if attempt + 1 == successes:
+                    return True, "MusicBrainz is responding"
+                return True, (
+                    f"MusicBrainz is busy but usable "
+                    f"({successes}/{attempt + 1} succeeded)"
+                )
+        else:
+            last_error = detail
+        if attempt < samples - 1:
+            _time.sleep(1.2)
+
+    if "503" in last_error or "busy" in last_error.lower():
+        return False, (
+            f"MusicBrainz is overloaded — 0/{samples} requests answered. "
+            "Their server, not your library"
+        )
+    return False, f"cannot reach MusicBrainz: {last_error}"
 
 
 @dataclass

@@ -103,9 +103,13 @@ settle_seconds = 20
 auto_threshold = 90
 
 # MusicBrainz returns 503 under load, which looks exactly like "album not
-# found". Before believing that, retry this many times with a growing delay
-# (3s, 6s, 12s, 24s). Set to 0 to give up on the first empty answer.
-lookup_retries = 4
+# found". Before believing that, re-run the whole lookup this many times.
+#
+# Note beets already retries each HTTP request 6 times internally with
+# backoff, and rate-limits itself to one request every 4 seconds. These are
+# *additional* full lookups on top of that, so 2 means up to 18 attempts per
+# album. Raising it makes a bad MusicBrainz day survivable but very slow.
+lookup_retries = 2
 """
 
 
@@ -148,7 +152,7 @@ class WatcherConfig:
     enabled: bool = True
     settle_seconds: float = 20.0
     auto_threshold: float = 90.0
-    lookup_retries: int = 4
+    lookup_retries: int = 2
 
 
 @dataclass
@@ -215,7 +219,7 @@ class Config:
             enabled=bool(watch.get("enabled", True)),
             settle_seconds=float(watch.get("settle_seconds", 20)),
             auto_threshold=float(watch.get("auto_threshold", 90)),
-            lookup_retries=int(watch.get("lookup_retries", 4)),
+            lookup_retries=int(watch.get("lookup_retries", 2)),
         )
         return cfg
 

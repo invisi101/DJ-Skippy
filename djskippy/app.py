@@ -1821,7 +1821,9 @@ class DJSkippy(App):
         tries = self._retry_counts.get(request.path, 0)
         if tries < self.cfg.watcher.lookup_retries:
             self._retry_counts[request.path] = tries + 1
-            delay = min(30.0, 3.0 * (2 ** tries))   # 3s, 6s, 12s, 24s
+            # beets has already retried this lookup 6 times internally, so
+            # a short pause before a fresh one is enough.
+            delay = min(20.0, 5.0 * (2 ** tries))   # 5s, 10s
             try:
                 self.call_from_thread(
                     self.notify_status,
