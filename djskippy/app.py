@@ -293,12 +293,18 @@ class ArtPane(Widget):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.track_path: str = ""
-        self._pil_cache: tuple[str, Any] | None = None
+        #: Keyed on the cover and the size it was rendered at, not the track:
+        #: every track on an album shares one image, and rebuilding it per
+        #: cursor move is what made moving through a track list feel heavy.
+        self._render_cache: tuple[tuple, Any] | None = None
 
     def set_track(self, path: str) -> None:
-        if path != self.track_path:
-            self.track_path = path
-            self._pil_cache = None
+        if path == self.track_path:
+            return
+        previous = art_mod.art_key(self.track_path) if self.track_path else None
+        self.track_path = path
+        if art_mod.art_key(path) != previous:
+            self._render_cache = None
             self.refresh()
 
     def render(self) -> Any:
@@ -309,15 +315,18 @@ class ArtPane(Widget):
             return Text("\n  no track", style="bright_black")
 
         # Preferred path: real terminal graphics.
+        key = (art_mod.art_key(self.track_path), width, height)
+        if self._render_cache is not None and self._render_cache[0] == key:
+            return self._render_cache[1]
+
         try:
             from textual_image.renderable import Image as ImageRenderable
 
-            if self._pil_cache is None or self._pil_cache[0] != self.track_path:
-                image = art_mod.load_pil_image(self.track_path)
-                self._pil_cache = (self.track_path, image)
-            image = self._pil_cache[1]
+            image = art_mod.load_pil_image(self.track_path)
             if image is not None:
-                return ImageRenderable(image, width=width, height=height)
+                renderable = ImageRenderable(image, width=width, height=height)
+                self._render_cache = (key, renderable)
+                return renderable
         except Exception:
             pass
 
@@ -841,10 +850,7 @@ class DJSkippy(App):
 
     def _watcher_status(self, message: str) -> None:
         """Called from the watcher thread."""
-        try:
-            self.call_from_thread(self.notify_status, message)
-        except Exception:
-            pass
+        self._ui(self.notify_status, message)
 
     def _on_new_album(self, path: Path) -> None:
         """A new album finished copying. Import it unattended."""
@@ -868,9 +874,7 @@ class DJSkippy(App):
             self.call_from_thread(self._after_disk_merge, added)
 
     def _after_disk_merge(self, added: int) -> None:
-        cursor = self._panes[0].cursor
-        self._refresh_library()
-        self._panes[0].move_to(cursor)
+        self._preserve_selection(self._refresh_library)
         self._update_services()
         self.notify_status(
             f"found {added} more track(s) on disk — "
@@ -1006,6 +1010,36 @@ class DJSkippy(App):
                     break
         pane.refresh()
 
+    def _preserve_selection(self, rebuild) -> None:
+        """Rebuild the library panes without moving the user.
+
+        A background refresh that resets the cursor is indistinguishable from
+        the interface jumping about on its own, which is precisely what it
+        should never do. Selections are restored by name, not by index, since
+        new entries shift the indices.
+        """
+        artist = self._panes[0].selected
+        album = self._panes[1].selected
+        track = self._panes[2].selected
+        track_path = getattr(track, "path", None)
+        column = self.focus_column
+
+        rebuild()
+
+        if artist in self._panes[0].meta:
+            self._panes[0].move_to(self._panes[0].meta.index(artist))
+            self._refresh_albums()
+        if album in self._panes[1].meta:
+            self._panes[1].move_to(self._panes[1].meta.index(album))
+            self._refresh_tracks()
+        if track_path:
+            for index, candidate in enumerate(self._panes[2].meta):
+                if getattr(candidate, "path", None) == track_path:
+                    self._panes[2].move_to(index)
+                    break
+        self.focus_column = column
+        self._update_focus()
+
     def _update_focus(self) -> None:
         for index, pane in enumerate(self._panes):
             pane.is_active = index == self.focus_column
@@ -1065,19 +1099,35 @@ class DJSkippy(App):
         if should_show:
             self._cava.refresh()
 
-    def _on_player_change(self) -> None:
-        """Called from mpv's thread - must hop back to the UI thread."""
+    def _ui(self, callback, *args) -> None:
+        """Run a callback on the UI thread, from either side.
+
+        call_from_thread *raises* when called from the app's own thread, and
+        that exception was being swallowed - so anything triggered by a
+        keypress never refreshed the display and appeared not to have worked
+        until the next half-second tick. Pausing was the obvious victim: the
+        audio stopped immediately, the indicator did not.
+        """
+        import threading
+
+        if threading.get_ident() == getattr(self, "_thread_id", None):
+            try:
+                callback(*args)
+            except Exception:
+                pass
+            return
         try:
-            self.call_from_thread(self._on_player_change_ui)
+            self.call_from_thread(callback, *args)
         except Exception:
             pass
 
+    def _on_player_change(self) -> None:
+        """Playback state changed - from mpv's thread or our own."""
+        self._ui(self._on_player_change_ui)
+
     def _on_player_error(self, message: str) -> None:
         """Playback failure, raised from mpv's thread."""
-        try:
-            self.call_from_thread(self.notify_status, message)
-        except Exception:
-            pass
+        self._ui(self.notify_status, message)
 
     def _on_player_change_ui(self) -> None:
         self._now.refresh()
@@ -1933,10 +1983,7 @@ class DJSkippy(App):
 
     def _on_beets_done(self, result: CommandResult) -> None:
         """Called from the command thread."""
-        try:
-            self.call_from_thread(self._show_beets_result, result)
-        except Exception:
-            pass
+        self._ui(self._show_beets_result, result)
 
     def _show_beets_result(self, result: CommandResult) -> None:
         self._set_view(View.IMPORT)
@@ -2263,24 +2310,32 @@ class DJSkippy(App):
         if self.tagger.running:
             self.tagger.abort()
         self._bulk_running = False
-        self.notify_status(f"STOPPED — {message}. Nothing is wrong with your library.")
-        self._set_view(View.REVIEW)
+        self.notify_status(
+            f"import stopped — {message}. Your library is fine; press 5 for detail"
+        )
+        if self.view is View.IMPORT:
+            self._set_view(View.REVIEW)
 
     def _defer_for_review(self, path: str, reason: str, kind: str = "weak") -> None:
         target = Path(path)
         if not any(item.path == target for item in self.review_queue):
             self.review_queue.append(ReviewItem(target, reason, kind))
-        try:
-            self.call_from_thread(
-                self.notify_status,
-                f"{target.name}: {reason} — press 5 to see what to do",
-            )
-            self.call_from_thread(self._update_services)
-        except Exception:
-            pass
+        self._ui(
+            self.notify_status,
+            f"{target.name}: {reason} — press 5 to see what to do",
+        )
+        self._ui(self._update_services)
 
     def _show_tag_request(self, request: TaggerRequest) -> None:
         self._tag_request = request
+        if self._auto_tagging and self.view not in (View.IMPORT, View.HELP):
+            # This came from the watcher or a bulk run, not from the user
+            # asking. Never yank someone out of what they are doing to show
+            # them a decision they did not request.
+            self.notify_status(
+                f"{Path(request.path).name} needs a decision — press 6"
+            )
+            return
         lines: list[str] = []
         if request.is_duplicate:
             lines.append(f"DUPLICATE: {request.duplicate_info}")
@@ -2364,7 +2419,11 @@ class DJSkippy(App):
         self._auto_tagging = False
         stats = self.tagger.stats
         self.library.load()
-        self._set_view(View.LIBRARY)
+        if self.view is View.IMPORT:
+            # Only move them if they were watching the import finish.
+            self._set_view(View.LIBRARY)
+        elif self.view is View.LIBRARY:
+            self._preserve_selection(self._refresh_library)
         message = (
             f"tagged {stats['imported']} · as-is {stats['asis']} · "
             f"skipped {stats['skipped']}"

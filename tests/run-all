@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.." || exit 1
 PY="./.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
 
-HEADLESS=(smoke playback_test transport_test browser_test playlist_test
+HEADLESS=(smoke responsiveness_test playback_test transport_test browser_test playlist_test
           optional_musicbrainz_test multidisc_test import_test review_test
           watcher_test locking_test equivalence_test robustness_test)
 DEVICES=(lifecycle_test soak_test integration)

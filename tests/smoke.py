@@ -45,6 +45,16 @@ async def main() -> int:
           f"{app.library.track_count} tracks")
 
     async with app.run_test(size=(160, 45)) as pilot:
+        # The disk scan finishes a second or so after startup and adds
+        # everything beets has not tagged. Let it settle first: index
+        # arithmetic below is meaningless while the list is still growing.
+        settled = app.library.track_count
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            if app.library.track_count == settled and app.library.untagged_count:
+                break
+            settled = app.library.track_count
+
         print("\nboot")
         check("artists pane populated", len(app._panes[0].items) > 0,
               f"{len(app._panes[0].items)} artists")

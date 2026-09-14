@@ -691,6 +691,10 @@ it.
 - **Textual's shutdown writes to the terminal**, so on SIGHUP — where the
   terminal has already gone — it blocks and the process survives detached.
   Signal handling tears everything down itself and does not wait.
+- **`call_from_thread` raises when called from the app's own thread.** Swallow
+  that and every keypress-triggered redraw silently does nothing until the
+  next tick, which reads as the program ignoring you. `_ui()` dispatches to
+  the right side.
 
 ---
 
@@ -767,6 +771,7 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 | Suite | Covers |
 |---|---|
 | `smoke` | UI, every key, all seven views, headless |
+| `responsiveness` | the display answers on the keypress; background work never moves you |
 | `playback` | advancing at a track's end, skipping unplayable files |
 | `transport` | next, previous, queue, shuffle, repeat, gapless bookkeeping |
 | `browser` | playing files that are not in the library |

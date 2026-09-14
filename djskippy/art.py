@@ -31,6 +31,9 @@ ART_NAMES = (
 )
 ART_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
 
+#: Enough to find a file to pull embedded artwork out of.
+AUDIO_SUFFIXES_HINT = (".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wma", ".wav")
+
 UPPER_HALF = "▀"
 
 
@@ -211,15 +214,49 @@ def has_art(track_path: str) -> bool:
     return bool(track_path) and load_art_bytes(track_path) is not None
 
 
-def load_pil_image(track_path: str):
-    """Return the cover as a PIL image, or None.
+def art_key(track_path: str) -> tuple[str, float]:
+    """Identify the *cover*, not the track.
 
-    Used to feed textual-image, which - when it is installed and the terminal
-    supports it - draws real graphics via the kitty protocol or sixel instead
-    of the half-block approximation above. kitty gets genuinely sharp art this
-    way; everything else falls back to render_segments().
+    Every track on an album shares one cover, so keying a cache by track path
+    reloads and re-decodes the same 1500x1500 JPEG on every cursor move. The
+    folder and its mtime identify the artwork itself.
     """
-    data = load_art_bytes(track_path)
+    folder = Path(track_path).parent
+    try:
+        return str(folder), folder.stat().st_mtime
+    except OSError:
+        return str(folder), 0.0
+
+
+@lru_cache(maxsize=32)
+def _decode(key: tuple[str, float], size: int):
+    """Decode a cover once and keep it at a sensible size.
+
+    Handing a 1500x1500 image to the terminal renderer costs about 6ms per
+    draw; pre-scaled to roughly the pane size it costs half a millisecond,
+    and the pane is a few dozen characters wide - the extra pixels were never
+    going to be visible.
+    """
+    # The key *is* the folder, so any track in it finds the same artwork.
+    # Including the track path here was the mistake: it made every track a
+    # separate cache entry for one shared cover.
+    folder = Path(key[0])
+    data = None
+    picture = find_art_file(str(folder / "x"))
+    if picture is not None:
+        try:
+            data = picture.read_bytes()
+        except OSError:
+            data = None
+    if not data:
+        try:
+            for entry in sorted(folder.iterdir()):
+                if entry.is_file() and entry.suffix.lower() in AUDIO_SUFFIXES_HINT:
+                    data = extract_embedded_art(str(entry))
+                    if data:
+                        break
+        except OSError:
+            pass
     if not data:
         return None
     try:
@@ -227,9 +264,25 @@ def load_pil_image(track_path: str):
 
         image = Image.open(io.BytesIO(data))
         image.load()
-        return image.convert("RGB")
+        image = image.convert("RGB")
+        if max(image.size) > size:
+            image.thumbnail((size, size), Image.LANCZOS)
+        return image
     except Exception:
         return None
+
+
+def load_pil_image(track_path: str, size: int = 512):
+    """Return the cover as a PIL image, or None.
+
+    Used to feed textual-image, which - when it is installed and the terminal
+    supports it - draws real graphics via the kitty protocol or sixel instead
+    of the half-block approximation above. Cached per cover, so moving down a
+    track list does not re-decode the same artwork each time.
+    """
+    if not track_path:
+        return None
+    return _decode(art_key(track_path), size)
 
 
 def best_renderer() -> str:
