@@ -85,25 +85,52 @@ def start_instance() -> tuple[subprocess.Popen, int, int | None]:
             break
         time.sleep(0.5)
 
+    if app_pid:
+        OURS.add(app_pid)
+    OURS.add(proc.pid)
+
     cava_pid = None
     if app_pid:
         deadline = time.time() + 15
         while time.time() < deadline:
-            found = pids("cava -p /tmp/dj-skippy-cava")
-            if found:
-                cava_pid = found[0]
+            # Only cava processes whose parent is the instance we started.
+            for candidate in pids("cava -p /tmp/dj-skippy-cava"):
+                try:
+                    stat = Path(f"/proc/{candidate}/stat").read_text().split()
+                    if int(stat[3]) == app_pid:
+                        cava_pid = candidate
+                        break
+                except (OSError, IndexError, ValueError):
+                    continue
+            if cava_pid:
+                OURS.add(cava_pid)
                 break
             time.sleep(0.5)
 
     return proc, app_pid, cava_pid
 
 
+#: Only processes this test started. A blanket pkill would also kill the
+#: user's own DJ-Skippy — which it did, mid-listen, before this was fixed.
+OURS: set[int] = set()
+
+
 def cleanup() -> None:
-    subprocess.run(["pkill", "-KILL", "-f", "python -m djskippy"],
-                   capture_output=True)
-    subprocess.run(["pkill", "-KILL", "-f", "cava -p /tmp/dj-skippy-cava"],
-                   capture_output=True)
-    time.sleep(1)
+    """Kill only what we started, never anything else."""
+    for pid in list(OURS):
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            if not alive(pid):
+                break
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                break
+            time.sleep(0.5)
+        OURS.discard(pid)
+    time.sleep(0.5)
+
+    # Sweep the configs belonging to the instances we started. Left out when
+    # cleanup became surgical, which the final check then caught.
     for path in Path("/tmp").glob("dj-skippy-cava-*.conf"):
         try:
             path.unlink()
@@ -137,6 +164,13 @@ def main() -> int:
     if not LAUNCHER.exists():
         print(f"launcher not found: {LAUNCHER}")
         return 1
+
+    # Never disturb a DJ-Skippy the user is actually using.
+    existing = [p for p in pids("python -m djskippy")]
+    if existing:
+        print(f"  a DJ-Skippy is already running (pid {existing[0]}); "
+              "skipping so it is not killed")
+        return 0
 
     cleanup()
     try:

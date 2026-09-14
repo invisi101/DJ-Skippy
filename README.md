@@ -1,24 +1,32 @@
 # DJ-Skippy
 
-A terminal music player that does the whole job: plays anything, tags your
-library from MusicBrainz, watches your music folder and imports new albums by
-itself, shows album art and a live audio visualiser, manages named playlists,
-and serves a browser player on localhost.
+A terminal music player. It plays everything in your music folder — every
+format, gapless — with album art, a live audio visualiser, named playlists and
+an optional browser player.
+
+It can *also* look your albums up on MusicBrainz and tag them properly,
+including watching the folder and importing new arrivals by itself. That part
+is optional and clearly marked: the interface always tells you which metadata
+came from MusicBrainz and which was read from the files. Turn it off entirely
+and everything still plays.
 
 Navigation is vim/yazi-style miller columns. Transport and library semantics
 are borrowed from cmus, which got them right.
 
 ```
-╭─ Artists ─────╬─ Albums ──────╬─ Tracks ─────────╮ ╭─ Art ──────╮
-│ Bob Dylan     │ 1984 Red Ros. │ 01 Transmetropo. │ │            │
-│>The Pogues    │>1985 Rum, So. │>02 The Old Main  │ │  [ cover ] │
-│ Frank Zappa   │ 1988 If I Sh. │ 03 Wild Cats of  │ │            │
-│ Jeff Buckley  │ 1989 Peace a. │ 04 I'm a Man You │ │            │
-╰───────────────┴───────────────┴──────────────────╯ ╰────────────╯
+╭─ Artists ──────╬─ Albums ───────────╬─ Tracks ──────────╮ ╭─ Art ─────╮
+│   Bob Dylan    │   1984 Red Roses   │   01 Transmetropo.│ │           │
+│>  The Pogues   │ > 1985 Rum, Sodomy │ > 02 The Old Main │ │ [ cover ] │
+│ ◐ Frank Zappa  │   1988 If I Should │   03 Wild Cats of │ │           │
+│ · Jeff Buckley │ · 1989 Peace and L │   04 I'm a Man You│ │           │
+╰────────────────┴────────────────────┴───────────────────╯ ╰───────────╯
 ▂▅▇▃▂▆█▅▃▁▄▇▆▂▅█▃▁▄▆▇▃▂▅▆█▄▂▁▃▅▇▆▄▂▁▃▅▇█▆▄▂▁▃▄▆▇▅▃▁▂▄
 ▶ The Old Main Drag — The Pogues (FLAC)
   1:12 ━━━━━━━━╸───────────────── 3:32   vol 80%  shuffle
  1:Library 2:Playlist 3:Queue 4:Browser 5:Review 6:Import 7:Help
+   enter play  space pause  v stop  b/z next/prev  ? help  q quit
+
+(blank = tagged from MusicBrainz, · = read from the file, ◐ = partly tagged)
 ```
 
 ---
@@ -30,10 +38,10 @@ are borrowed from cmus, which got them right.
 - [Keys](#keys)
 - [The library](#the-library)
 - [Playlists](#playlists)
-- [Importing your library](#importing-your-library)
+- [Tagging your library](#tagging-your-library-optional)
 - [The Browser](#the-browser-4)
 - [When something needs you](#when-something-needs-you--review-5)
-- [Automatic importing](#automatic-importing)
+- [Automatic importing](#automatic-importing-optional)
 - [Tagging by hand](#tagging-by-hand)
 - [Album art](#album-art)
 - [The visualiser](#the-visualiser)
@@ -168,13 +176,27 @@ behaviour and it is the correct one.
 | `S` | name and save the current playlist |
 | `L` | browse saved playlists (`d` deletes, `r` renames) |
 | `p` | add the selection straight to a named playlist |
-| `t` | tag this album from MusicBrainz |
-| `I` | import everything not yet in the library |
 | `d` | remove from playlist / clear queue |
 
 Whatever the cursor is on is what gets used. On an **artist** that means every
 album they have; on an **album**, the whole album; on a **track**, just that
 track.
+
+### Tagging — only when MusicBrainz is on
+
+| Key | Action |
+|---|---|
+| `i` | import everything not yet tagged |
+| `t` | tag just this album |
+| `d` | find duplicates *(in Import view)* |
+| `f` | fetch missing album art *(in Import view)* |
+| `M` | albums with missing tracks *(in Import view)* |
+| `R` | re-sync tags from MusicBrainz *(in Import view)* |
+| `X` | retry everything in Review *(in Review view)* |
+| `Esc` | stop a running import |
+
+`M` and `R` keep their capitals only because `m` is mute and `r` is repeat,
+and those must work from every view.
 
 ### Toggles
 
@@ -271,25 +293,33 @@ They are different things, and the distinction is the best idea cmus ever had:
 
 ---
 
-## Importing your library
+## Tagging your library *(optional)*
 
-Press **`6`** for the Import view. It tells you how much of what is on disk is
-actually in the library, and lists every album folder that is not.
+None of this is required to play music. It exists because properly tagged
+files sort correctly, have real album art, and know what year they came out.
+
+Press **`6`** for the Import view. It shows how much of your library carries
+MusicBrainz data, and lists every album folder that does not.
 
 | Key | Action |
 |---|---|
-| `I` | **import everything** that is not in the library yet |
-| `Enter` | tag just the highlighted folder, interactively |
-| `Esc` | stop a running import |
-| `D` | find duplicates |
+| `i` | **tag everything** not already tagged |
+| `Enter` | tag just the highlighted folder, deciding each match yourself |
+| `Esc` | stop a running import — anything already done stays done |
+| `d` | find duplicates |
+| `f` | download missing album art |
 | `M` | albums with tracks missing |
-| `R` | re-sync tags from MusicBrainz |
-| `F` | download missing album art |
+| `R` | re-fetch tags for things already tagged |
 
-`I` runs unattended under the same confidence gate as the watcher: matches at
+`i` runs unattended under the same confidence gate as the watcher: matches at
 or above 90% are applied, everything weaker goes to Review (`5`). Progress is
-shown live, and `Esc` stops it at any point — already-tagged albums stay
-tagged.
+shown live.
+
+**Your files are never moved, renamed or deleted.** Only the tags inside them
+change, and only for albums that matched.
+
+Multi-disc sets are grouped into one album before beets sees them — see
+[Multi-disc albums](#multi-disc-albums).
 
 The same operations exist as commands: `:import`, `:dup`, `:missing`,
 `:mbsync`, `:fetchart`, `:stats`.
@@ -305,10 +335,10 @@ there is a full guide in [docs/BEETS.md](docs/BEETS.md).
 
 ---
 
-## Automatic importing
+## Automatic importing *(optional)*
 
-**Drop an album into `~/Music` and DJ-Skippy handles it.** No command, no
-prompt.
+**Drop an album into `~/Music` and DJ-Skippy tags it.** No command, no prompt.
+Requires MusicBrainz to be on; it plays regardless.
 
 What actually happens:
 
@@ -334,7 +364,8 @@ not throw away your FLACs because a 192kbps copy turned up.
 Press **`5`** to see what is waiting, and **`Enter`** on any entry to tag it
 interactively.
 
-Turn the whole thing off with `enabled = false` under `[watcher]`.
+Turn the watcher off with `enabled = false` under `[watcher]`, or switch
+MusicBrainz off altogether with `musicbrainz = false` under `[library]`.
 
 ---
 
@@ -608,22 +639,27 @@ dj --version
 DJ-Skippy is deliberately not a from-scratch music player. It is a well-joined
 interface over engines that are already excellent:
 
-| Layer | Engine |
-|---|---|
-| Decoding and playback | **mpv** via libmpv — every format, gapless, ReplayGain |
+| Layer | Engine | Required? |
+|---|---|---|
+| Decoding and playback | **mpv** via libmpv — every format, gapless, ReplayGain | yes |
+| Library | the filesystem, read with **mutagen** | yes |
+| Interface | **Textual** | yes |
+| Tagging | **beets**, used as a Python library rather than a subprocess | optional |
+| Visualisation | **cava**, read through its raw output | optional |
+| Remote control | **MPRIS** over D-Bus, plus a Flask web player | optional |
 
-Gapless is real rather than nominal: the next track is handed to mpv while the
-current one is still playing, so mpv performs the handover internally. Measured
-against raw mpv driving its own playlist, the silence at a transition is
-identical to within 10ms.
-| Library and tagging | **beets**, used as a Python library rather than a subprocess |
-| Visualisation | **cava**, read through its raw output |
-| Interface | **Textual** |
-| Remote control | **MPRIS** over D-Bus, plus a Flask web player |
+Only the first three are needed to play music. Everything else can be switched
+off in the config, and the interface degrades honestly rather than pretending.
 
-Because the tagger embeds beets' own `ImportSession`, it honours your existing
+**Gapless is real rather than nominal.** The next track is handed to mpv while
+the current one is still playing, so mpv performs the handover internally.
+Measured by recording the speakers during a transition and comparing against
+raw mpv driving its own playlist, the silence is identical to within 10ms.
+
+**The tagger embeds beets' own `ImportSession`**, so it honours your existing
 `~/.config/beets/config.yaml` exactly — same plugins, same match settings, same
-non-destructive defaults.
+non-destructive defaults. A test asserts that equivalence rather than assuming
+it.
 
 ### Things worth knowing if you read the source
 
@@ -640,14 +676,30 @@ non-destructive defaults.
   position is `scroll_top`.
 - **`Input` selects its whole value on focus**, which silently wipes any
   prefilled command prefix. `select_on_focus` is turned off.
+- **mpv's end-file event carries an integer reason**, not a string. Matching it
+  as text matched nothing, so tracks never advanced at their natural end and an
+  unplayable file stalled the playlist permanently. Compare against
+  `mpv.MpvEventEndFile.EOF` and `.ERROR`.
+- **cava refuses an odd number of bars in stereo.** Bars are sized to the
+  terminal width, so an odd-width window disabled the visualiser entirely with
+  no visible reason until its stderr stopped being discarded.
+- **beets' `incremental` mode records directories it has *seen***, skipped ones
+  included, and never offers them again. It is switched off for DJ-Skippy's
+  imports, which decide what needs doing by checking library membership.
+- **werkzeug does not raise on a taken port** — it prints a message and exits
+  the process. The port is probed with a plain socket first.
+- **Textual's shutdown writes to the terminal**, so on SIGHUP — where the
+  terminal has already gone — it blocks and the process survives detached.
+  Signal handling tears everything down itself and does not wait.
 
 ---
 
 ## Troubleshooting
 
 **No music showing up**
-Check `music_dir` in the config. The status line on start says which backend
-loaded and how many tracks it found. `:reload` rescans.
+Check `music_dir` in the config. The status line says how many tracks were
+found and how many are tagged. `:reload` rescans. Note that the disk scan
+finishes a second or two after startup, so the count climbs briefly.
 
 **No sound**
 mpv plays through PipeWire/PulseAudio. Confirm with `mpv --no-video <file>`.
@@ -708,26 +760,32 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ## Tests
 
 ```bash
-./.venv/bin/python tests/smoke.py          # UI, keys, navigation (headless)
-./.venv/bin/python tests/watcher_test.py   # folder watching and debouncing
-./.venv/bin/python tests/playlist_test.py  # playlist create/load/rename/delete
-./.venv/bin/python tests/review_test.py    # review guidance and retry logic
-./.venv/bin/python tests/browser_test.py   # playing files outside the library
-./.venv/bin/python tests/multidisc_test.py # grouping discs into albums
-./.venv/bin/python tests/playback_test.py  # advancing, skipping broken files
-./.venv/bin/python tests/transport_test.py # next/prev/queue/shuffle/repeat
-./.venv/bin/python tests/locking_test.py   # one library operation at a time
-./.venv/bin/python tests/soak_test.py      # memory and drift over a long session
-./.venv/bin/python tests/optional_musicbrainz_test.py  # plays with or without it
-./.venv/bin/python tests/robustness_test.py # hostile filesystems
-./.venv/bin/python tests/equivalence_test.py # behaves as beets does
-./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL
-./.venv/bin/python tests/integration.py    # real audio, cava, web, D-Bus
+./tests/run-all                    # everything
+./.venv/bin/python tests/smoke.py  # or one at a time
 ```
 
-`smoke.py` drives the real application through Textual's test harness with no
-terminal. `integration.py` plays a few seconds of actual audio and needs a
-sound device, a session D-Bus, and a free port.
+| Suite | Covers |
+|---|---|
+| `smoke` | UI, every key, all seven views, headless |
+| `playback` | advancing at a track's end, skipping unplayable files |
+| `transport` | next, previous, queue, shuffle, repeat, gapless bookkeeping |
+| `browser` | playing files that are not in the library |
+| `playlist` | create, add to, load, rename, delete |
+| `optional_musicbrainz` | the library and player with tagging on *and* off |
+| `multidisc` | grouping CD1/CD2 into one album, the awkward shapes included |
+| `import` | bulk import and the confidence gate |
+| `review` | guidance for each reason, retry logic |
+| `watcher` | detecting new albums, waiting out a copy in progress |
+| `locking` | one library operation at a time |
+| `equivalence` | does what beets does — asserted against the real `beet` |
+| `robustness` | symlink loops, unreadable folders, broken configs, emoji names |
+| `lifecycle` | SIGHUP, SIGTERM, SIGKILL, and the terminal vanishing first |
+| `soak` | memory and drift over a thousand interactions |
+| `integration` | real audio, cava, the web server, D-Bus |
+
+Most run headless through Textual's test harness. `integration`, `playback`,
+`transport` and `lifecycle` use real audio and a real sound device;
+`equivalence` shells out to `beet`.
 
 ---
 

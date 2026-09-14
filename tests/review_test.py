@@ -151,6 +151,15 @@ async def main() -> int:
         app._auto_answer(request(72.0, tag="weak2"))
 
         print("\nthe view renders guidance")
+        # Populate explicitly. Relying on what the earlier sections left in
+        # the queue made this order-dependent, and it failed in a full run
+        # while passing in isolation.
+        app.review_queue = [
+            ReviewItem(Path("/home/neil/Music/A/Weak"), "best match only 72%",
+                       "weak"),
+            ReviewItem(Path("/home/neil/Music/B/Gap"), "no MusicBrainz match",
+                       "nomatch"),
+        ]
         await pilot.press("5")
         check("view 5 is Review", app.view is View.REVIEW)
         rows = app._panes[2].items
