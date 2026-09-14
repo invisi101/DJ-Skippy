@@ -357,8 +357,6 @@ a session D-Bus, so not on a bare TTY.
 Guides to the other tools on this machine, kept because they are useful:
 
 - **[docs/CMUS.md](docs/CMUS.md)** — cmus: views, keys, filters, ReplayGain
-- **[docs/BEETS.md](docs/BEETS.md)** — beets: tagging a library from
-  MusicBrainz, if you ever want to do that separately
 
 ---
 
