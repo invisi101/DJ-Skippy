@@ -100,8 +100,16 @@ async def main() -> int:
         none = TaggerRequest(path="/home/neil/Music/Test/None",
                              item_count=3, candidates=[])
         app._auto_answer(none)
+        check("empty lookup retries rather than giving up",
+              answers[-1] == "rescan", str(answers[-1]))
+
+        # Exhaust the retries: it must then skip, never guess.
+        app.cfg.watcher.lookup_retries = 0
+        app._auto_answer(TaggerRequest(path="/home/neil/Music/Test/None2",
+                                       item_count=3, candidates=[]))
         check("no-match is skipped not guessed", answers[-1] == "skip",
               str(answers[-1]))
+        app.cfg.watcher.lookup_retries = 4
 
         print("\nimport view")
         await pilot.press("6")

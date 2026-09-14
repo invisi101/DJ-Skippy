@@ -31,6 +31,7 @@ are borrowed from cmus, which got them right.
 - [The library](#the-library)
 - [Playlists](#playlists)
 - [Importing your library](#importing-your-library)
+- [When something needs you](#when-something-needs-you--review-5)
 - [Automatic importing](#automatic-importing)
 - [Tagging by hand](#tagging-by-hand)
 - [Album art](#album-art)
@@ -297,6 +298,41 @@ Press **`5`** to see what is waiting, and **`Enter`** on any entry to tag it
 interactively.
 
 Turn the whole thing off with `enabled = false` under `[watcher]`.
+
+---
+
+## When something needs you — Review (`5`)
+
+Nothing is ever guessed at. Anything the importer will not decide alone lands
+in Review, **and every entry tells you why it is there and what to do**.
+
+| Marker | Means | What to do |
+|---|---|---|
+| `?` | Match found but below the threshold | `Enter` — look at it and decide. Usually a different edition |
+| `✗` | MusicBrainz has no such release | `Enter`, then `u` to import with your own tags. Common for bootlegs and live recordings |
+| `⟳` | MusicBrainz did not answer | `X` to re-check and retry. **Their server, not your library** |
+| `=` | You already have this album | `Enter` to decide. It was *kept* — nothing was replaced |
+
+Keys: `Enter` opens it, `X` retries everything, `D` dismisses an entry. The
+guidance panel follows your cursor.
+
+### About MusicBrainz outages
+
+Under load MusicBrainz returns HTTP 503, and beets surfaces that as "no
+matching release found" — indistinguishable, from the outside, from an album
+that genuinely is not in the database. Treating the two the same would file
+your whole library under "needs review" on a bad afternoon.
+
+DJ-Skippy handles it in three layers:
+
+1. **Retries every empty lookup** — 4 times by default, backing off 3s, 6s,
+   12s, 24s. Albums that appear missing usually resolve on a later attempt.
+2. **Checks before starting** a bulk import, and refuses to begin if
+   MusicBrainz is down, rather than burning through your library for nothing.
+3. **Stops mid-run** if three albums in a row come back empty and a health
+   check confirms the server is the problem — then says so plainly.
+
+Tune with `lookup_retries` under `[watcher]`.
 
 ---
 

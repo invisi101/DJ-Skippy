@@ -11,6 +11,8 @@ whatever theme the terminal is running instead of fighting it.
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,9 +30,78 @@ from .cava import CavaVisualiser
 from .config import Config, load_state, save_state
 from .library import Library, Track
 from .player import Player, RepeatMode
-from .maintenance import BeetsCommand, CommandResult, find_unimported_albums
+from .maintenance import (
+    BeetsCommand,
+    CommandResult,
+    check_musicbrainz,
+    find_unimported_albums,
+)
 from .playlists import PlaylistStore
 from .tagger import Tagger, TaggerRequest
+
+
+@dataclass
+class ReviewItem:
+    """An album the importer would not decide alone, and why.
+
+    The reason is not decoration: "MusicBrainz did not answer" and "this album
+    is not in MusicBrainz" look identical from the outside but need opposite
+    responses, and the interface has to say which it is.
+    """
+
+    path: Path
+    reason: str
+    kind: str = "weak"  # weak | nomatch | offline | duplicate
+
+    #: What the user should actually do about it, keyed by kind.
+    GUIDANCE = {
+        "weak": [
+            "MusicBrainz found this album but was not confident enough.",
+            "Usually a different edition — a remaster, a reissue, a bonus disc.",
+            "",
+            "  enter   look at the match and decide yourself",
+            "          then: a = apply   1-9 = a different candidate",
+            "                u = keep your existing tags   s = leave it alone",
+        ],
+        "nomatch": [
+            "MusicBrainz has no release matching these tracks.",
+            "Common for bootlegs, live recordings, rips with missing tracks,",
+            "and anything self-released.",
+            "",
+            "  enter   open it, then press u to import with your existing tags",
+            "          (it still joins the library, just without MusicBrainz data)",
+            "",
+            "  If you know the release, find it on musicbrainz.org and use the",
+            "  enter-Id option to paste its ID directly.",
+        ],
+        "offline": [
+            "MusicBrainz did not answer. This is their server, not your music",
+            "and not your library — under load they return 503 to everyone.",
+            "",
+            "  X       re-check MusicBrainz and retry everything here",
+            "",
+            "  Nothing was changed. Leave it an hour and press X, or just run",
+            "  the import again later — already-tagged albums are skipped.",
+        ],
+        "duplicate": [
+            "You already have this album. It was KEPT — nothing was replaced",
+            "or deleted.",
+            "",
+            "  enter   decide: keep both, upgrade, merge, or skip",
+            "",
+            "  Check the bitrates before upgrading. A 192kbps copy replacing a",
+            "  FLAC rip is the one mistake that cannot be undone.",
+        ],
+    }
+
+    @property
+    def label(self) -> str:
+        icon = {"weak": "?", "nomatch": "✗", "offline": "⟳", "duplicate": "="}
+        return f"  {icon.get(self.kind, '?')}  {self.path.name}   — {self.reason}"
+
+    @property
+    def guidance(self) -> list[str]:
+        return self.GUIDANCE.get(self.kind, self.GUIDANCE["weak"])
 
 
 class View(IntEnum):
@@ -395,6 +466,12 @@ DJ-Skippy — keys
     V             visualiser      A   album art      w   web player
     ?             this help       q   quit
 
+  REVIEW  (view 5 — anything the importer would not decide alone)
+    Every entry says why it is there and what to do about it.
+    enter         open it and decide
+    X             re-check MusicBrainz and retry everything
+    D             dismiss an entry
+
   IMPORT & MAINTENANCE  (view 6 — you never need a beets command)
     I             import every album on disk that is not in the library yet
     enter         tag just the highlighted folder, interactively
@@ -468,7 +545,10 @@ class DJSkippy(App):
         # When the watcher triggers an import we answer the tagger ourselves
         # unless the match is too weak to trust.
         self._auto_tagging = False
-        self.review_queue: list[Path] = []
+        self.review_queue: list[ReviewItem] = []
+        self._consecutive_no_candidates = 0
+        self._mb_offline = False
+        self._retry_counts: dict[str, int] = {}
         self._picking_playlist = False
         self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
         self._unimported: list = []
@@ -818,16 +898,8 @@ class DJSkippy(App):
             self._panes[0].display = False
             self._panes[1].display = False
             self._panes[2].display = True
-            self._panes[2].pane_title = "Review — albums the watcher could not tag alone"
-            if self.review_queue:
-                labels = [f"{p.name}   ({p.parent.name}/)" for p in self.review_queue]
-                self._panes[2].set_items(labels, list(self.review_queue))
-            else:
-                empty = ["", "  Nothing waiting.", "",
-                         "  New albums dropped into your music folder are",
-                         "  tagged automatically. Anything ambiguous lands",
-                         "  here instead of being guessed at.", ""]
-                self._panes[2].set_items(empty, empty)
+            self._panes[2].pane_title = "Review — what needs you, and what to do"
+            self._render_review()
         elif view is View.IMPORT:
             self._panes[0].display = False
             self._panes[1].display = False
@@ -973,6 +1045,10 @@ class DJSkippy(App):
             self._start_tagging()
         elif key == "I":
             self._import_everything()
+        elif key == "X" and self.view is View.REVIEW:
+            self._retry_review()
+        elif key == "D" and self.view is View.REVIEW:
+            self._dismiss_review()
         elif key == "D" and self.view is View.IMPORT:
             self._run_beets_op("duplicates")
         elif key == "M" and self.view is View.IMPORT:
@@ -1014,6 +1090,13 @@ class DJSkippy(App):
             self._jump_match(-1)
 
     def _after_move(self) -> None:
+        if self.view is View.REVIEW and self.review_queue:
+            # Re-render so the guidance matches the highlighted entry, but keep
+            # the cursor where the user put it.
+            cursor = self._panes[2].cursor
+            self._render_review()
+            self._panes[2].move_to(cursor)
+            return
         if self.view is View.LIBRARY:
             if self.focus_column == 0:
                 self._refresh_albums()
@@ -1049,10 +1132,10 @@ class DJSkippy(App):
 
         if self.view is View.REVIEW:
             selected = self._panes[2].selected
-            if isinstance(selected, Path):
-                self.review_queue = [p for p in self.review_queue if p != selected]
+            if isinstance(selected, ReviewItem):
+                self.review_queue = [i for i in self.review_queue if i is not selected]
                 self._update_services()
-                self._start_tagging(str(selected))
+                self._start_tagging(str(selected.path))
             return
 
         if self.view is View.LIBRARY and self.focus_column < 2:
@@ -1241,6 +1324,99 @@ class DJSkippy(App):
         else:
             self.notify_status(f"unknown setting: {key}")
 
+    # -- review ----------------------------------------------------------
+
+    def _render_review(self) -> None:
+        """The Review list, with guidance for whatever is highlighted.
+
+        The point of this view is that it should never leave you wondering what
+        to do next - every entry says why it is here and what the fix is.
+        """
+        lines: list[str] = []
+        meta: list[Any] = []
+
+        if not self.review_queue:
+            for line in [
+                "",
+                "  Nothing needs you.",
+                "",
+                "  Albums are tagged automatically when MusicBrainz is confident.",
+                "  Anything it is unsure about lands here rather than being",
+                "  guessed at — so an empty list is the good outcome.",
+                "",
+                f"  Press 6 to import, or drop an album into "
+                f"{self.cfg.library.music_dir.name}/ and it happens by itself.",
+                "",
+            ]:
+                lines.append(line)
+                meta.append(None)
+            self._panes[2].set_items(lines, meta)
+            return
+
+        counts: dict[str, int] = {}
+        for item in self.review_queue:
+            counts[item.kind] = counts.get(item.kind, 0) + 1
+        summary = "  ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+
+        lines.append(f"  {len(self.review_queue)} waiting     {summary}")
+        lines.append("")
+        meta.extend([None, None])
+
+        for item in self.review_queue:
+            lines.append(item.label)
+            meta.append(item)
+
+        # Guidance for the highlighted entry.
+        current = self._panes[2].selected if self._panes[2].meta else None
+        if not isinstance(current, ReviewItem):
+            current = self.review_queue[0]
+
+        lines.append("")
+        lines.append(f"  ── {current.path.name} " + "─" * 30)
+        meta.extend([None, None])
+        for line in current.guidance:
+            lines.append(f"  {line}")
+            meta.append(None)
+
+        lines.append("")
+        lines.append("  X = retry everything here    D = dismiss this entry")
+        meta.extend([None, None])
+
+        self._panes[2].set_items(lines, meta)
+
+    def _retry_review(self) -> None:
+        """X — re-check MusicBrainz, then retry everything in the list."""
+        healthy, message = check_musicbrainz()
+        if not healthy:
+            self.notify_status(f"still down: {message} — try again later")
+            return
+
+        self._mb_offline = False
+        self._consecutive_no_candidates = 0
+        paths = [str(item.path) for item in self.review_queue]
+        if not paths:
+            self.notify_status("nothing to retry")
+            return
+
+        self.review_queue.clear()
+        self._update_services()
+        self._auto_tagging = True
+        self._bulk_running = True
+        self.tagger.start(paths)
+        self._set_view(View.IMPORT)
+        self.notify_status(
+            f"MusicBrainz is back — retrying {len(paths)} album(s)"
+        )
+        self.set_interval(1.0, self._tick_import, name="import-progress")
+
+    def _dismiss_review(self) -> None:
+        selected = self._panes[2].selected
+        if isinstance(selected, ReviewItem):
+            self.review_queue = [i for i in self.review_queue if i is not selected]
+            self._update_services()
+            self._render_review()
+            self.notify_status(f"dismissed {selected.path.name}")
+
     # -- bulk import and beets operations --------------------------------
 
     def _refresh_import_view(self) -> None:
@@ -1299,6 +1475,29 @@ class DJSkippy(App):
         )
         if not self._unimported:
             self.notify_status("everything on disk is already in the library")
+            return
+
+        healthy, message = check_musicbrainz()
+        if not healthy:
+            self.notify_status(
+                f"NOT STARTING — {message}. Your library is fine; try later."
+            )
+            self._panes[2].set_items(
+                [
+                    "",
+                    f"  MusicBrainz is not answering: {message}",
+                    "",
+                    "  Importing now would file your whole library under",
+                    "  'needs review' for no reason, so DJ-Skippy did not start.",
+                    "",
+                    "  This is their server under load, not your music and not",
+                    "  your tags. It usually clears within the hour.",
+                    "",
+                    "  Press I again later. Nothing has been changed.",
+                    "",
+                ],
+                [None] * 11,
+            )
             return
 
         paths = [str(f.path) for f in self._unimported]
@@ -1543,36 +1742,97 @@ class DJSkippy(App):
             # KEEP is the only safe unattended answer - never remove or
             # overwrite an existing copy on a guess.
             self.tagger.respond("keep")
-            self._defer_for_review(request.path, "duplicate")
+            self._defer_for_review(
+                request.path,
+                f"already in library: {request.duplicate_info or 'existing copy'}",
+                "duplicate",
+            )
             return True
 
         best = request.candidates[0] if request.candidates else None
-        if best is not None and best.similarity >= self.cfg.watcher.auto_threshold:
-            self.tagger.respond("apply")
+
+        if best is not None:
+            self._consecutive_no_candidates = 0
+            self._retry_counts.pop(request.path, None)
+            if best.similarity >= self.cfg.watcher.auto_threshold:
+                self.tagger.respond("apply")
+                try:
+                    self.call_from_thread(
+                        self.notify_status,
+                        f"auto-tagged {best.artist} — {best.album} "
+                        f"({best.similarity:.0f}%)",
+                    )
+                except Exception:
+                    pass
+                return True
+
+            self.tagger.respond("skip")
+            self._defer_for_review(
+                request.path,
+                f"best match only {best.similarity:.0f}%",
+                "weak",
+            )
+            return True
+
+        # No candidates at all. Before concluding anything, retry: under load
+        # MusicBrainz returns 503, which beets surfaces as "no match found",
+        # and the same album usually resolves on a later attempt. Giving up on
+        # the first empty answer is how a whole library ends up in Review.
+        tries = self._retry_counts.get(request.path, 0)
+        if tries < self.cfg.watcher.lookup_retries:
+            self._retry_counts[request.path] = tries + 1
+            delay = min(30.0, 3.0 * (2 ** tries))   # 3s, 6s, 12s, 24s
             try:
                 self.call_from_thread(
                     self.notify_status,
-                    f"auto-tagged {best.artist} — {best.album} ({best.similarity:.0f}%)",
+                    f"no answer for {Path(request.path).name} — "
+                    f"retrying in {delay:.0f}s "
+                    f"({tries + 1}/{self.cfg.watcher.lookup_retries})",
                 )
             except Exception:
                 pass
+            # Sleeping here is correct: this runs on the tagger's own worker
+            # thread, and the importer expects its decision hook to block.
+            time.sleep(delay)
+            self.tagger.respond("rescan")
             return True
 
-        reason = (
-            f"best match only {best.similarity:.0f}%" if best else "no MusicBrainz match"
-        )
+        self._consecutive_no_candidates += 1
         self.tagger.respond("skip")
-        self._defer_for_review(request.path, reason)
+        if self._consecutive_no_candidates >= 3 and not self._mb_offline:
+            self._defer_for_review(request.path, "MusicBrainz did not answer",
+                                   "offline")
+            try:
+                self.call_from_thread(self._suspect_musicbrainz_down)
+            except Exception:
+                pass
+        else:
+            self._defer_for_review(request.path, "no MusicBrainz match", "nomatch")
         return True
 
-    def _defer_for_review(self, path: str, reason: str) -> None:
+    def _suspect_musicbrainz_down(self) -> None:
+        """Three no-answers in a row: check, and stop the run if it is them."""
+        if self._mb_offline:
+            return
+        healthy, message = check_musicbrainz()
+        if healthy:
+            self._consecutive_no_candidates = 0
+            return
+        self._mb_offline = True
+        if self.tagger.running:
+            self.tagger.abort()
+        self._bulk_running = False
+        self.notify_status(f"STOPPED — {message}. Nothing is wrong with your library.")
+        self._set_view(View.REVIEW)
+
+    def _defer_for_review(self, path: str, reason: str, kind: str = "weak") -> None:
         target = Path(path)
-        if target not in self.review_queue:
-            self.review_queue.append(target)
+        if not any(item.path == target for item in self.review_queue):
+            self.review_queue.append(ReviewItem(target, reason, kind))
         try:
             self.call_from_thread(
                 self.notify_status,
-                f"{target.name}: {reason} — press 5 to review",
+                f"{target.name}: {reason} — press 5 to see what to do",
             )
             self.call_from_thread(self._update_services)
         except Exception:

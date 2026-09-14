@@ -101,6 +101,11 @@ settle_seconds = 20
 # 90 is about right: above that, differences are cosmetic capitalisation;
 # below, they tend to be genuinely different releases.
 auto_threshold = 90
+
+# MusicBrainz returns 503 under load, which looks exactly like "album not
+# found". Before believing that, retry this many times with a growing delay
+# (3s, 6s, 12s, 24s). Set to 0 to give up on the first empty answer.
+lookup_retries = 4
 """
 
 
@@ -143,6 +148,7 @@ class WatcherConfig:
     enabled: bool = True
     settle_seconds: float = 20.0
     auto_threshold: float = 90.0
+    lookup_retries: int = 4
 
 
 @dataclass
@@ -209,6 +215,7 @@ class Config:
             enabled=bool(watch.get("enabled", True)),
             settle_seconds=float(watch.get("settle_seconds", 20)),
             auto_threshold=float(watch.get("auto_threshold", 90)),
+            lookup_retries=int(watch.get("lookup_retries", 4)),
         )
         return cfg
 

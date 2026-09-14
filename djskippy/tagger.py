@@ -76,7 +76,7 @@ class Tagger:
         self.running = False
         self.current: TaggerRequest | None = None
         self.error: str | None = None
-        self.stats = {"imported": 0, "skipped": 0, "asis": 0}
+        self.stats = {"imported": 0, "skipped": 0, "asis": 0, "retried": 0}
 
         # Progress across a bulk run.
         self.total_paths = 0
@@ -91,7 +91,7 @@ class Tagger:
             return False
         self._abort = False
         self.error = None
-        self.stats = {"imported": 0, "skipped": 0, "asis": 0}
+        self.stats = {"imported": 0, "skipped": 0, "asis": 0, "retried": 0}
         self.total_paths = len(paths)
         self.decisions = 0
         self.current_album = ""
@@ -246,6 +246,13 @@ class _TuiImportSession:
                 )
                 answer = tagger._ask(request)
 
+                if answer == "rescan":
+                    # Re-run the lookup for this same album. This is what the
+                    # R key does at beets' own prompt, and it is the correct
+                    # response to MusicBrainz returning 503 - the album is
+                    # usually found on a later attempt.
+                    tagger.stats["retried"] += 1
+                    return Action.RESCAN
                 if answer == "skip" or answer is None:
                     tagger.stats["skipped"] += 1
                     return Action.SKIP

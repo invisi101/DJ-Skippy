@@ -1,0 +1,155 @@
+"""Review-queue tests.
+
+The point of the Review view is that it must never leave you wondering what to
+do. These checks confirm that every reason an album can land there produces
+distinct, actionable guidance, and that a MusicBrainz outage is reported as an
+outage rather than filed as a library problem.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from djskippy.config import Config  # noqa: E402
+from djskippy.maintenance import check_musicbrainz  # noqa: E402
+from djskippy.tagger import Candidate, TaggerRequest  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(label: str, condition: bool, detail: str = "") -> None:
+    mark = "ok  " if condition else "FAIL"
+    print(f"  [{mark}] {label}{(' — ' + detail) if detail else ''}")
+    if not condition:
+        FAILURES.append(label)
+
+
+async def main() -> int:
+    from djskippy.app import DJSkippy, ReviewItem, View
+
+    print("\nguidance exists for every reason")
+    for kind in ("weak", "nomatch", "offline", "duplicate"):
+        item = ReviewItem(Path("/tmp/Album"), "reason", kind)
+        guidance = item.guidance
+        check(f"{kind} has guidance", len(guidance) >= 3,
+              f"{len(guidance)} lines")
+        check(f"{kind} names a key to press",
+              any(k in " ".join(guidance) for k in ("enter", "X", "u", "a")),
+              "")
+    check("guidance differs by kind",
+          len({tuple(ReviewItem(Path("/t"), "r", k).guidance)
+               for k in ("weak", "nomatch", "offline", "duplicate")}) == 4)
+
+    print("\nMusicBrainz health probe")
+    healthy, message = check_musicbrainz()
+    check("probe returns a verdict and a message",
+          isinstance(healthy, bool) and bool(message),
+          f"healthy={healthy}: {message}")
+
+    cfg = Config.load()
+    cfg.web.enabled = cfg.mpris.enabled = False
+    cfg.visualiser.enabled = cfg.watcher.enabled = False
+    cfg.playback.resume = False
+    app = DJSkippy(cfg)
+
+    def request(similarity: float | None, duplicate: bool = False,
+                tag: str = "") -> TaggerRequest:
+        candidates = []
+        if similarity is not None:
+            candidates = [Candidate(
+                album="A", artist="B", distance=1.0 - similarity / 100.0,
+                url="", info_line="",
+            )]
+        return TaggerRequest(
+            # Distinct per call: _defer_for_review dedupes by path, so
+            # reusing one would silently drop the second entry.
+            path=f"/home/neil/Music/Test/Album-{tag or similarity}",
+            item_count=10, candidates=candidates,
+            is_duplicate=duplicate, duplicate_info="Existing",
+        )
+
+    async with app.run_test(size=(160, 45)) as pilot:
+        answers: list = []
+        app.tagger.respond = answers.append
+        app._auto_tagging = True
+
+        print("\nreasons are recorded distinctly")
+        app._auto_answer(request(72.0))
+        check("weak match recorded as weak",
+              app.review_queue[-1].kind == "weak",
+              app.review_queue[-1].reason)
+
+        app._auto_answer(request(None, duplicate=True, tag="dup"))
+        check("duplicate recorded as duplicate",
+              app.review_queue[-1].kind == "duplicate",
+              app.review_queue[-1].reason)
+
+        # With retries disabled, an empty lookup is taken at face value.
+        # (With them enabled it retries first - covered below.)
+        app._consecutive_no_candidates = 0
+        app.cfg.watcher.lookup_retries = 0
+        app._auto_answer(request(None, tag="gap"))
+        check("exhausted no-match recorded as nomatch",
+              app.review_queue[-1].kind == "nomatch",
+              app.review_queue[-1].reason)
+        app.cfg.watcher.lookup_retries = 4
+
+        print("\nempty lookups are retried before being given up on")
+        app.review_queue.clear()
+        answers.clear()
+        app._retry_counts.clear()
+        app._consecutive_no_candidates = 0
+        app.cfg.watcher.lookup_retries = 2
+        # Keep the test quick - the real delays are 3s, 6s, 12s, 24s.
+        import djskippy.app as appmod
+        real_sleep, appmod.time.sleep = appmod.time.sleep, lambda _s: None
+
+        req = request(None, tag="flaky")
+        app._auto_answer(req)
+        check("first empty answer retries", answers[-1] == "rescan",
+              str(answers[-1]))
+        app._auto_answer(req)
+        check("second empty answer retries", answers[-1] == "rescan",
+              str(answers[-1]))
+        app._auto_answer(req)
+        check("gives up only after the retries", answers[-1] == "skip",
+              str(answers[-1]))
+        check("then lands in review", len(app.review_queue) == 1,
+              f"{len(app.review_queue)} queued")
+
+        appmod.time.sleep = real_sleep
+        app.cfg.watcher.lookup_retries = 4
+        app.review_queue.clear()
+        app._auto_answer(request(72.0, tag="weak2"))
+
+        print("\nthe view renders guidance")
+        await pilot.press("5")
+        check("view 5 is Review", app.view is View.REVIEW)
+        rows = app._panes[2].items
+        check("review list rendered", len(rows) > 5, f"{len(rows)} rows")
+        text = "\n".join(rows)
+        check("shows a count", "waiting" in text)
+        check("shows what to press", "enter" in text or "X" in text)
+        check("offers retry", "retry" in text.lower())
+
+        print("\nempty review reads as success, not emptiness")
+        app.review_queue.clear()
+        app._render_review()
+        empty = "\n".join(app._panes[2].items)
+        check("explains why empty is good",
+              "Nothing needs you" in empty and "guessed at" in empty)
+
+    print()
+    if FAILURES:
+        print(f"{len(FAILURES)} FAILED: {', '.join(FAILURES)}")
+        return 1
+    print("all checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

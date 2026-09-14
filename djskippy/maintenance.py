@@ -125,6 +125,44 @@ def find_unimported_albums(
     return out
 
 
+def check_musicbrainz(timeout: float = 12.0) -> tuple[bool, str]:
+    """Is MusicBrainz answering right now?
+
+    Returns (healthy, message). Their server returns HTTP 503 with a "currently
+    busy" body under load, and beets surfaces that as "no matching release
+    found" - indistinguishable, from the outside, from an album that genuinely
+    is not in the database. Checking directly lets us tell the user the truth
+    instead of quietly filing half their library under "needs review".
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = (
+        "https://musicbrainz.org/ws/2/release/"
+        "?query=release:%22Abbey%20Road%22%20AND%20artist:%22The%20Beatles%22"
+        "&fmt=json&limit=1"
+    )
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "DJ-Skippy/1.0 (health check)"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "replace")
+        data = json.loads(body)
+        if "error" in data:
+            return False, str(data["error"])
+        if data.get("releases"):
+            return True, "MusicBrainz is responding"
+        return False, "MusicBrainz returned no results for a known album"
+    except urllib.error.HTTPError as exc:
+        if exc.code == 503:
+            return False, "MusicBrainz is rate-limiting or overloaded (503)"
+        return False, f"MusicBrainz returned HTTP {exc.code}"
+    except Exception as exc:
+        return False, f"cannot reach MusicBrainz: {type(exc).__name__}"
+
+
 @dataclass
 class CommandResult:
     name: str
