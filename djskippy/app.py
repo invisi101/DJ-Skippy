@@ -26,7 +26,7 @@ from textual.widget import Widget
 from textual.widgets import Input
 
 from . import art as art_mod
-from .cava import CavaVisualiser
+from .cava import CavaVisualiser, clean_stale_configs
 from .config import Config, load_state, save_state
 from .library import Library, Track
 from .player import Player, RepeatMode
@@ -592,6 +592,9 @@ class DJSkippy(App):
         self._cmdline.select_on_focus = False
         self.set_focus(None)
 
+        self._install_signal_handlers()
+        clean_stale_configs()
+
         self._refresh_library()
         self._update_focus()
 
@@ -618,6 +621,43 @@ class DJSkippy(App):
             self._start_watcher()
         if self.cfg.playback.resume:
             self._restore_state()
+
+    def _install_signal_handlers(self) -> None:
+        """Exit cleanly when the terminal goes away.
+
+        Closing a kitty window (or any terminal) sends SIGHUP to the
+        foreground process. Without a handler, Textual keeps running detached:
+        the process survives until logout still holding the MPRIS bus name,
+        the web port, and a cava process burning CPU. A music player should
+        stop when you close its window.
+
+        SIGTERM is handled the same way so `pkill` and a desktop session
+        ending are also clean, and both save playback position on the way out.
+        """
+        import signal
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, self._on_signal, sig)
+            except (NotImplementedError, RuntimeError, ValueError):
+                # Not every platform or loop supports this; the atexit
+                # backstop in cava.py still prevents orphaned processes.
+                pass
+
+    def _on_signal(self, sig) -> None:
+        """Shut down on a terminating signal, saving state first."""
+        try:
+            self._save_state()
+        except Exception:
+            pass
+        # exit() unwinds through on_unmount, which stops cava, the web server
+        # and mpv properly.
+        self.exit()
 
     async def on_unmount(self) -> None:
         self._save_state()

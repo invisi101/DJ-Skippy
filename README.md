@@ -42,6 +42,7 @@ are borrowed from cmus, which got them right.
 - [Configuration](#configuration)
 - [Command line](#command-line)
 - [How it works](#how-it-works)
+- [Closing it](#closing-it)
 - [Troubleshooting](#troubleshooting)
 - [Tests](#tests)
 - [Reference docs](#reference-docs)
@@ -589,12 +590,35 @@ it above 100 sends everything there.
 
 ---
 
+## Closing it
+
+**DJ-Skippy dies when its window does.** Close the terminal and the player,
+the visualiser, the web server and the D-Bus registration all go with it —
+there is no background process left holding your speakers hostage until
+logout. Your playback position is saved on the way out, so `resume` picks up
+where you were.
+
+This is handled at three levels, because a music player leaving an orphaned
+cava process burning CPU is a genuinely annoying bug:
+
+| How it ends | What happens |
+|---|---|
+| `q`, or closing the window (SIGHUP) | Clean exit: state saved, cava stopped, web server stopped, temp files removed |
+| `pkill`, logging out (SIGTERM) | The same |
+| A crash or `kill -9` (SIGKILL) | No handler can run — so cava is killed by the **kernel** instead, via `PR_SET_PDEATHSIG` |
+
+Stale cava configs from an earlier hard kill are cleared on the next start.
+
+---
+
 ## Tests
 
 ```bash
 ./.venv/bin/python tests/smoke.py          # UI, keys, navigation (headless)
 ./.venv/bin/python tests/watcher_test.py   # folder watching and debouncing
 ./.venv/bin/python tests/playlist_test.py  # playlist create/load/rename/delete
+./.venv/bin/python tests/review_test.py    # review guidance and retry logic
+./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL
 ./.venv/bin/python tests/integration.py    # real audio, cava, web, D-Bus
 ```
 

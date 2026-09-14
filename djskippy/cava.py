@@ -12,9 +12,68 @@ including audio from other applications. That is a feature, not a bug.
 from __future__ import annotations
 
 import asyncio
+import atexit
+import ctypes
+import os
 import shutil
+import signal
 import tempfile
+import time
 from pathlib import Path
+
+#: Every cava process we have started, so they can be cleaned up even on an
+#: abrupt exit. See `_kill_stragglers`.
+_LIVE_PROCESSES: set[int] = set()
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to SIGTERM this child when its parent dies.
+
+    Linux's PR_SET_PDEATHSIG. Without it, killing DJ-Skippy in a way that
+    skips its cleanup - SIGKILL, a crash, a terminal that vanishes - leaves
+    cava running and consuming CPU until logout. This makes the guarantee
+    kernel-level rather than best-effort.
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+    except Exception:
+        pass
+
+
+def _kill_stragglers() -> None:
+    """Backstop at interpreter exit: terminate any cava we started."""
+    for pid in list(_LIVE_PROCESSES):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        _LIVE_PROCESSES.discard(pid)
+
+
+atexit.register(_kill_stragglers)
+
+
+def clean_stale_configs(max_age_seconds: float = 3600.0) -> int:
+    """Remove leftover cava configs from previous runs.
+
+    Returns how many were removed. Only touches files old enough that no
+    running instance could still be using them.
+    """
+    removed = 0
+    now = time.time()
+    try:
+        for path in Path(tempfile.gettempdir()).glob("dj-skippy-cava-*.conf"):
+            try:
+                if now - path.stat().st_mtime > max_age_seconds:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return removed
 
 # Eighth-block characters give eight sub-rows of vertical resolution per cell.
 BLOCKS = " ▁▂▃▄▅▆▇█"
@@ -93,7 +152,9 @@ class CavaVisualiser:
                     "cava", "-p", str(self._config_path),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
+                    preexec_fn=_die_with_parent,
                 )
+                _LIVE_PROCESSES.add(self._process.pid)
             except Exception as exc:
                 self.error = str(exc)
                 continue
@@ -156,6 +217,7 @@ class CavaVisualiser:
             self._task = None
 
         if self._process is not None:
+            pid = self._process.pid
             try:
                 self._process.terminate()
                 await asyncio.wait_for(self._process.wait(), timeout=2)
@@ -164,6 +226,7 @@ class CavaVisualiser:
                     self._process.kill()
                 except Exception:
                     pass
+            _LIVE_PROCESSES.discard(pid)
             self._process = None
 
         self._cleanup_config()
