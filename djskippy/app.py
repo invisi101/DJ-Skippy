@@ -497,14 +497,15 @@ DJ-Skippy — keys
     Every entry says why it is there and what to do about it.
     enter         open it and decide
     X             re-check MusicBrainz and retry everything
-    D             dismiss an entry
+    d             dismiss an entry
 
   IMPORT & MAINTENANCE  (view 6 — you never need a beets command)
-    I             import every album on disk that is not in the library yet
+    i             import every album on disk that is not in the library yet
     enter         tag just the highlighted folder, interactively
-    D             find duplicates          M   albums with missing tracks
+    d             find duplicates          M   albums with missing tracks
+    f             download missing album art
     R             re-sync tags from MusicBrainz
-    F             download missing album art
+    (M and R stay uppercase: m is mute and r is repeat, everywhere.)
     esc           stop a running import
     :dup  :missing  :mbsync  :fetchart  :stats  :import [path]
 
@@ -1220,6 +1221,8 @@ class DJSkippy(App):
             self.player.enqueue(tracks)
             self.notify_status(f"queued {len(tracks)} track(s)")
         elif key == "d":
+            # One key, meaning "remove/dismiss the thing in front of me" -
+            # which depends entirely on the view.
             if self._picking_playlist:
                 self._delete_selected_playlist()
             elif self.view is View.QUEUE:
@@ -1229,21 +1232,28 @@ class DJSkippy(App):
             elif self.view is View.PLAYLIST:
                 self.player.remove_from_playlist(pane.cursor)
                 self._set_view(View.PLAYLIST)
+            elif self.view is View.REVIEW:
+                self._dismiss_review()
+            elif self.view is View.IMPORT:
+                self._run_beets_op("duplicates")
         elif key == "t":
             self._start_tagging()
-        elif key == "I":
+        # The main action in a view should not need shift held down.
+        # Lowercase wherever the key is free; M and R stay uppercase only
+        # because m is mute and r is repeat, which must work from every view.
+        elif key in ("i", "I"):
             self._import_everything()
         elif key == "X" and self.view is View.REVIEW:
             self._retry_review()
-        elif key == "D" and self.view is View.REVIEW:
+        elif key in ("d", "D") and self.view is View.REVIEW:
             self._dismiss_review()
-        elif key == "D" and self.view is View.IMPORT:
+        elif key in ("d", "D") and self.view is View.IMPORT:
             self._run_beets_op("duplicates")
         elif key == "M" and self.view is View.IMPORT:
             self._run_beets_op("missing")
         elif key == "R" and self.view is View.IMPORT:
             self._run_beets_op("mbsync")
-        elif key == "F" and self.view is View.IMPORT:
+        elif key in ("f", "F") and self.view is View.IMPORT:
             self._run_beets_op("fetchart")
         elif key == "escape" and self.tagger.running:
             self.tagger.abort()
@@ -1580,7 +1590,7 @@ class DJSkippy(App):
             meta.append(None)
 
         lines.append("")
-        lines.append("  X = retry everything here    D = dismiss this entry")
+        lines.append("  X = retry everything here    d = dismiss this entry")
         meta.extend([None, None])
 
         self._panes[2].set_items(lines, meta)
@@ -1644,7 +1654,7 @@ class DJSkippy(App):
             lines.append("    Esc stops — everything already tagged stays tagged.")
         elif self._unimported:
             lines.append(
-                f"  ▸ Press  I  to import all {len(self._unimported)} albums "
+                f"  ▸ Press  i  to import all {len(self._unimported)} albums "
                 f"({on_disk_tracks} tracks)."
             )
             lines.append("")
@@ -1668,8 +1678,8 @@ class DJSkippy(App):
         lines.extend([
             "",
             "  MAINTENANCE  (no terminal required)",
-            "    D  find duplicates        M  albums with missing tracks",
-            "    R  re-sync tags from MusicBrainz   F  fetch missing art",
+            "    d  find duplicates        M  albums with missing tracks",
+            "    f  fetch missing art      R  re-sync tags from MusicBrainz",
             "",
             "  ALBUM FOLDERS NOT YET IMPORTED",
         ])
