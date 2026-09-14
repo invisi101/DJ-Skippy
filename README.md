@@ -696,6 +696,7 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/playback_test.py  # advancing, skipping broken files
 ./.venv/bin/python tests/transport_test.py # next/prev/queue/shuffle/repeat
 ./.venv/bin/python tests/locking_test.py   # one library operation at a time
+./.venv/bin/python tests/soak_test.py      # memory and drift over a long session
 ./.venv/bin/python tests/robustness_test.py # hostile filesystems
 ./.venv/bin/python tests/equivalence_test.py # behaves as beets does
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL
