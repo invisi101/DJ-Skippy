@@ -109,22 +109,34 @@ right one.
 ### Playlists
 
 A playlist is a collection you name and keep — favourites, a mood, a road
-trip. Press **`2`** to see yours.
+trip. Press **`2`** to see them: your playlists on the left, the songs in the
+highlighted one on the right. `h` and `l` move between the columns.
 
-**To build one**, from anywhere in the Library:
+### Adding a song
 
-1. Put the cursor on a track, an album, or an artist
+1. Find it in the Library
 2. Press **`p`**
-3. Type a name
+3. Pick a playlist from the list, or take **`＋ New playlist…`** and name one
 
-That is it — created and saved. Press `p` on anything else and the name is
-already filled in, so adding more is a keypress and Enter. It works at any
-level: one track, a whole album, or everything by an artist.
+The playlist you used last is already highlighted, so adding a run of songs to
+the same one is `p`, `Enter`. `p` works on a whole album or an entire artist
+too, not just one track.
 
-**In view `2`:** `Enter` plays a playlist, `d` deletes it, `r` renames it.
+### Everything else
 
-Saved as **M3U8** in `~/.local/share/dj-skippy/playlists/`, so mpv, VLC and
-everything else can open them.
+| Where | Key | Does |
+|---|---|---|
+| playlists column | `Enter` | play it |
+| | `n` | make a new, empty one |
+| | `d` | delete it |
+| | `r` | rename it |
+| songs column | `Enter` | play the playlist from this song |
+| | `d` | **remove this song from the playlist** |
+| anywhere | `Esc` | cancel, if you were picking one |
+
+Changes save immediately. Stored as **M3U8** in
+`~/.local/share/dj-skippy/playlists/`, so mpv, VLC and everything else can
+open them.
 
 ---
 

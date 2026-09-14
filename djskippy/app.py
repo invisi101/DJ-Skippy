@@ -31,6 +31,10 @@ from .player import Player, RepeatMode
 from .playlists import PlaylistStore
 
 
+#: Marker object for the "New playlist…" row in the playlists column.
+NEW_PLAYLIST = object()
+
+
 class View(IntEnum):
     LIBRARY = 1
     PLAYLISTS = 2      # your saved collections — what "playlist" actually means
@@ -337,14 +341,19 @@ DJ-Skippy — keys
 
   PLAYLISTS  (view 2)
     A playlist is a collection you name and keep: favourites, a mood,
-    a road trip. Build one from anywhere in the Library.
+    a road trip.
 
-    p             add what the cursor is on to a playlist, by name.
-                  Creates it if it does not exist. Works on a single
-                  track, a whole album, or everything by an artist.
-    2             your playlists.  enter plays one
-                  d deletes,  r renames
-    S             save what is currently loaded as a new playlist
+    p             on any track, album or artist in the Library — asks
+                  which playlist to put it in, and offers to make a new
+                  one. The one you used last is already highlighted.
+    2             your playlists.  h and l move between the two columns
+    n             make a new, empty playlist
+    enter         on a playlist: play it
+                  on a song inside: play the playlist from there
+    d             on a playlist: delete it
+                  on a song: take that song out
+    r             rename a playlist
+    esc           cancel, if you were picking one
 
   NOW PLAYING  (view 3)
     What is loaded and playing through, with anything you have queued
@@ -432,6 +441,10 @@ class DJSkippy(App):
         self.web = None
         self.mpris = None
         self._browser_dir = self.cfg.library.music_dir
+        #: Tracks waiting to be filed, while the user picks a playlist.
+        self._pending_add: list[Track] = []
+        self._playlist_infos: list = []
+        self._last_playlist = ""
 
     # -- layout ----------------------------------------------------------
 
@@ -750,7 +763,7 @@ class DJSkippy(App):
     # -- current list abstraction ---------------------------------------
 
     def _current_pane(self) -> ListPane:
-        if self.view is View.LIBRARY:
+        if self.view in (View.LIBRARY, View.PLAYLISTS):
             return self._panes[self.focus_column]
         return self._panes[2]
 
@@ -862,13 +875,10 @@ class DJSkippy(App):
             self._panes[2].count_noun = "tracks"
             self._refresh_library()
         elif view is View.PLAYLISTS:
+            self.focus_column = 1
             self._panes[0].display = False
-            self._panes[1].display = False
+            self._panes[1].display = True
             self._panes[2].display = True
-            self._panes[2].pane_title = (
-                "Playlists — enter plays · d deletes · r renames"
-            )
-            self._panes[2].count_noun = "saved"
             self._render_playlists()
         elif view is View.PLAYING:
             self._panes[0].display = False
@@ -895,29 +905,70 @@ class DJSkippy(App):
             self._panes[2].set_items(lines, lines)
         columns.refresh()
 
-    def _render_playlists(self) -> None:
-        """Your saved collections."""
+    def _render_playlists(self, select: str | None = None) -> None:
+        """Two columns: your playlists, and the songs in the selected one.
+
+        `select` puts the cursor on a playlist by name — after creating or
+        adding to one, that is the one you want to be looking at.
+        """
         infos = self.playlists.list()
-        if infos:
-            self._panes[2].set_items([i.label for i in infos], infos)
+        self._playlist_infos = infos
+
+        if self._pending_add:
+            title = f"Add {len(self._pending_add)} track(s) to…"
+        else:
+            title = "Playlists — n new · d delete · r rename"
+        self._panes[1].pane_title = title
+        self._panes[1].count_noun = "saved"
+
+        labels = ["＋  New playlist…"] + [i.label for i in infos]
+        meta = [NEW_PLAYLIST] + list(infos)
+        cursor = min(self._panes[1].cursor, len(labels) - 1)
+        if select is not None:
+            for index, info in enumerate(infos, start=1):
+                if info.name == select:
+                    cursor = index
+                    break
+        self._panes[1].set_items(labels, meta)
+        self._panes[1].move_to(max(0, cursor))
+        self._render_playlist_songs()
+
+    def _render_playlist_songs(self) -> None:
+        """The songs in whichever playlist is highlighted."""
+        from .playlists import PlaylistInfo
+
+        selected = self._panes[1].selected
+        if not isinstance(selected, PlaylistInfo):
+            self._panes[2].pane_title = "Songs"
+            self._panes[2].count_noun = "tracks"
+            hint = [
+                "",
+                "  A playlist is a collection you name and keep —",
+                "  favourites, a mood, a road trip.",
+                "",
+                "  Press n to make an empty one, or go to the Library (1),",
+                "  put the cursor on a track, album or artist and press p.",
+                "",
+            ]
+            self._panes[2].set_items(hint, [None] * len(hint))
             return
-        empty = [
-            "",
-            "  You have not saved any playlists yet.",
-            "",
-            "  A playlist is a collection you build: favourites, a mood,",
-            "  a road trip. It has a name and it stays until you delete it.",
-            "",
-            "  To make one:",
-            "    1. press 1 for the Library",
-            "    2. put the cursor on a track, album or artist you want",
-            "    3. press p  and type a name for the playlist",
-            "",
-            "  Press p again on anything else to add it to the same one.",
-            "  Everything you add is saved straight away.",
-            "",
-        ]
-        self._panes[2].set_items(empty, [None] * len(empty))
+
+        tracks = self.playlists.load(selected.name, self.library)
+        self._panes[2].pane_title = f"{selected.name} — d removes a song"
+        self._panes[2].count_noun = "tracks"
+        if tracks:
+            width = max(24, self._panes[2].size.width - 14)
+            labels = [
+                f"{(t.title + '  —  ' + t.artist)[:width].ljust(width)} "
+                f"{t.length_str:>6}"
+                for t in tracks
+            ]
+            self._panes[2].set_items(labels, tracks)
+        else:
+            empty = ["", f"  “{selected.name}” is empty.", "",
+                     "  Go to the Library (1), find something you like,",
+                     "  and press p to add it.", ""]
+            self._panes[2].set_items(empty, [None] * len(empty))
 
     def _render_now_playing(self) -> None:
         """What is loaded and what jumps the queue, in one list."""
@@ -1080,6 +1131,12 @@ class DJSkippy(App):
         elif key == "h" and self.view is View.BROWSER:
             self._load_browser(self._browser_dir.parent)
             self.notify_status(f"{self._browser_dir}")
+        elif key == "h" and self.view is View.PLAYLISTS:
+            self.focus_column = 1
+            self._update_focus()
+        elif key == "l" and self.view is View.PLAYLISTS:
+            self.focus_column = 2
+            self._update_focus()
         elif key in ("h", "left") and self.view is View.LIBRARY:
             if key == "h" or not self.player.state.track:
                 self.focus_column = max(0, self.focus_column - 1)
@@ -1149,7 +1206,10 @@ class DJSkippy(App):
             # One key, meaning "remove/dismiss the thing in front of me" -
             # which depends entirely on the view.
             if self.view is View.PLAYLISTS:
-                self._delete_selected_playlist()
+                if self.focus_column == 2:
+                    self._remove_song_from_playlist()
+                else:
+                    self._delete_selected_playlist()
             elif self.view is View.PLAYING:
                 self.player.clear_queue()
                 self._set_view(View.PLAYING)
@@ -1160,6 +1220,12 @@ class DJSkippy(App):
         # The main action in a view should not need shift held down.
         # Lowercase wherever the key is free; M and R stay uppercase only
         # because m is mute and r is repeat, which must work from every view.
+        elif key == "n" and self.view is View.PLAYLISTS:
+            self._new_playlist_prompt()
+        elif key == "escape" and self._pending_add:
+            self._pending_add = []
+            self._render_playlists()
+            self.notify_status("cancelled")
         elif key == "S":
             self._save_playlist_prompt()
         elif key == "p":
@@ -1188,6 +1254,9 @@ class DJSkippy(App):
             self._jump_match(-1)
 
     def _after_move(self) -> None:
+        if self.view is View.PLAYLISTS and self.focus_column == 1:
+            self._render_playlist_songs()
+            return
         if self.view is View.LIBRARY:
             if self.focus_column == 0:
                 self._refresh_albums()
@@ -1217,9 +1286,28 @@ class DJSkippy(App):
         if self.view is View.PLAYLISTS:
             from .playlists import PlaylistInfo
 
-            selected = self._panes[2].selected
-            if isinstance(selected, PlaylistInfo):
-                self._load_playlist(selected.name)
+            if self.focus_column == 1:
+                chosen = self._panes[1].selected
+                if chosen is NEW_PLAYLIST:
+                    self._new_playlist_prompt()
+                elif isinstance(chosen, PlaylistInfo):
+                    if self._pending_add:
+                        self._file_pending_into(chosen.name)
+                    else:
+                        self._load_playlist(chosen.name)
+                return
+
+            # In the songs column: play the playlist from here.
+            info = self._panes[1].selected
+            track = self._panes[2].selected
+            if isinstance(info, PlaylistInfo) and isinstance(track, Track):
+                tracks = self.playlists.load(info.name, self.library)
+                index = next(
+                    (i for i, t in enumerate(tracks) if t.path == track.path), 0
+                )
+                self.player.set_playlist(tracks, index)
+                self._last_playlist = info.name
+                self.notify_status(f"playing “{info.name}” from {track.title}")
             return
 
         if self.view is View.LIBRARY and self.focus_column < 2:
@@ -1331,6 +1419,8 @@ class DJSkippy(App):
             self._save_playlist(arg)
         elif cmd in ("load", "open"):
             self._load_playlist(arg)
+        elif cmd == "newplaylist":
+            self._create_playlist(arg)
         elif cmd == "addto":
             self._add_to_playlist(arg)
         elif cmd == "rename":
@@ -1475,17 +1565,92 @@ class DJSkippy(App):
             self._render_playlists()
 
     def _add_to_playlist_prompt(self) -> None:
-        """p — add selection to a playlist, choosing or naming one."""
+        """p — pick a playlist to add the selection to.
+
+        Showing the playlists beats asking for a typed name: you choose from
+        what exists, or take the first row to make a new one.
+        """
         selection = self._selected_tracks()
         if not selection:
             self.notify_status("nothing selected")
             return
-        self._open_input("command", ":")
-        self._prefill(":addto ")
-        names = ", ".join(p.name for p in self.playlists.list()[:5]) or "none yet"
+        self._pending_add = list(selection)
+        self._set_view(View.PLAYLISTS)
+        if self._last_playlist:
+            self._render_playlists(select=self._last_playlist)
         self.notify_status(
-            f"add {len(selection)} track(s) to which playlist?  existing: {names}"
+            f"choose a playlist for {len(selection)} track(s) — "
+            "enter to add, esc to cancel"
         )
+
+    def _file_pending_into(self, name: str) -> None:
+        """Put the waiting tracks into a playlist, creating it if needed."""
+        tracks = self._pending_add
+        self._pending_add = []
+        if not tracks:
+            return
+        existing = (
+            self.playlists.load(name, self.library)
+            if self.playlists.exists(name) else []
+        )
+        known = {t.path for t in existing}
+        added = [t for t in tracks if t.path not in known]
+        self.playlists.save(name, existing + added)
+        self._last_playlist = name
+
+        if not existing:
+            self.notify_status(f"created “{name}” with {len(added)} track(s)")
+        elif added:
+            self.notify_status(f"added {len(added)} to “{name}”")
+        else:
+            self.notify_status(f"already in “{name}”")
+        self._render_playlists(select=name)
+
+    def _new_playlist_prompt(self) -> None:
+        """n — make a new playlist, named."""
+        self._open_input("command", ":")
+        self._prefill(":newplaylist ")
+        if self._pending_add:
+            self.notify_status(
+                f"name the new playlist for {len(self._pending_add)} track(s)"
+            )
+        else:
+            self.notify_status("name the new playlist")
+
+    def _create_playlist(self, name: str) -> None:
+        if not name:
+            self.notify_status("a playlist needs a name")
+            return
+        if self.playlists.exists(name):
+            self.notify_status(f"“{name}” already exists")
+            if self._pending_add:
+                self._file_pending_into(name)
+            return
+        if self._pending_add:
+            self._file_pending_into(name)
+        else:
+            self.playlists.save(name, [])
+            self.notify_status(f"created “{name}” — it is empty")
+        self._set_view(View.PLAYLISTS)
+        self._render_playlists(select=name)
+
+    def _remove_song_from_playlist(self) -> None:
+        """d in the songs column — take this one out."""
+        from .playlists import PlaylistInfo
+
+        info = self._panes[1].selected
+        track = self._panes[2].selected
+        if not isinstance(info, PlaylistInfo) or not isinstance(track, Track):
+            return
+        remaining = [
+            t for t in self.playlists.load(info.name, self.library)
+            if t.path != track.path
+        ]
+        self.playlists.save(info.name, remaining)
+        cursor = self._panes[2].cursor
+        self._render_playlists()
+        self._panes[2].move_to(min(cursor, len(self._panes[2].items) - 1))
+        self.notify_status(f"removed {track.title} from “{info.name}”")
 
     def _show_playlist_picker(self) -> None:
         self._set_view(View.PLAYLISTS)
@@ -1493,7 +1658,7 @@ class DJSkippy(App):
     def _delete_selected_playlist(self) -> None:
         from .playlists import PlaylistInfo
 
-        selected = self._panes[2].selected
+        selected = self._panes[1].selected
         if not isinstance(selected, PlaylistInfo):
             return
         if self.playlists.delete(selected.name):
@@ -1503,7 +1668,7 @@ class DJSkippy(App):
     def _rename_selected_playlist(self) -> None:
         from .playlists import PlaylistInfo
 
-        selected = self._panes[2].selected
+        selected = self._panes[1].selected
         if not isinstance(selected, PlaylistInfo):
             return
         self._open_input("command", ":")
