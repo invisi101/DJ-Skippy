@@ -160,6 +160,39 @@ async def main() -> int:
               and player._mpv_entries[0].path == tracks[-1].path,
               str([t.title for t in player._mpv_entries]))
 
+        print("\nmpv's playlist stays bounded over a long session")
+        player.set_playlist(tracks, 0)
+        await settle()
+        player.pause()
+        original_trim = player.TRIM_AFTER
+        player.TRIM_AFTER = 6
+        # Repeat all, so a short playlist can keep handing over rather than
+        # running out after a few tracks.
+        player.state.repeat = RepeatMode.ALL
+        for _ in range(30):
+            player._queue_upcoming()
+            nxt = player._mpv_pos + 1
+            if nxt < len(player._mpv_entries):
+                player._on_mpv_moved(nxt)
+        try:
+            real_count = player._mpv.playlist_count
+        except Exception:
+            real_count = -1
+        check("our mirror does not grow without limit",
+              len(player._mpv_entries) <= 10,
+              str(len(player._mpv_entries)))
+        check("mpv's own playlist does not grow either",
+              0 < real_count <= 10, str(real_count))
+        check("index stays valid", 0 <= player.index < len(player._playlist),
+              f"{player.index} of {len(player._playlist)}")
+        check("mirror still agrees with our playlist",
+              player._mpv_entries[player._mpv_pos].path
+              == player._playlist[player.index].path,
+              f"{player._mpv_entries[player._mpv_pos].title} vs "
+              f"{player._playlist[player.index].title}")
+        player.TRIM_AFTER = original_trim
+        player.state.repeat = RepeatMode.OFF
+
         print("\nstop clears cleanly")
         player.stop()
         await settle(0.5)

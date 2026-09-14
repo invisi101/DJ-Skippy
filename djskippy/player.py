@@ -79,6 +79,9 @@ class Player:
         self._mpv_pos = 0
         #: Our playlist index corresponding to each mpv entry.
         self._entry_index: list[int] = []
+        #: Set while pruning mpv's playlist, so the resulting position change
+        #: is not mistaken for the music moving on.
+        self._trimming = False
 
         self._mpv = mpv.MPV(
             video=False,
@@ -206,8 +209,41 @@ class Player:
             self._mpv_entries.append(upcoming)
             self._entry_index.append(upcoming_index)
 
+    #: How many played entries to let accumulate before pruning mpv's
+    #: playlist. Left unchecked it grows for every track of a long session.
+    TRIM_AFTER = 24
+
+    def _trim_played(self) -> None:
+        """Drop entries mpv has already finished with.
+
+        Removing them shifts playlist-pos, which would otherwise look like a
+        track change to the observer, so the trimming flag suppresses that.
+        """
+        with self._lock:
+            drop = self._mpv_pos
+            if drop < self.TRIM_AFTER:
+                return
+            self._trimming = True
+
+        try:
+            for _ in range(drop):
+                try:
+                    self._mpv.command("playlist-remove", "0")
+                except Exception:
+                    break
+            with self._lock:
+                self._mpv_entries = self._mpv_entries[drop:]
+                self._entry_index = self._entry_index[drop:]
+                self._mpv_pos = 0
+        finally:
+            self._trimming = False
+
     def _on_mpv_moved(self, pos: int) -> None:
         """mpv advanced to the next file on its own - catch our state up."""
+        if self._trimming:
+            # Position moved because we removed played entries, not because
+            # the music moved on.
+            return
         with self._lock:
             if pos is None or not (0 <= pos < len(self._mpv_entries)):
                 return
@@ -229,6 +265,7 @@ class Player:
         self._apply_replaygain(self.state.replaygain)
         self._on_change()
         self._queue_upcoming()
+        self._trim_played()
 
     def _note_failure(self) -> None:
         """A track could not be played. Skip on, unless everything is failing."""
