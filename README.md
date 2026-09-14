@@ -336,13 +336,27 @@ in Review, **and every entry tells you why it is there and what to do**.
 
 ### Multi-disc albums
 
-A folder called `CD1` or `Disc 2` is one disc of a set, and beets matches it on
-its own against the *complete* release — so half the tracks look missing and
-the score lands around 70%. The album is usually fine; the match is not.
+These are handled for you. A folder called `CD1` or `Disc 2` is one disc of a
+set, and handing it to beets alone is harmful: it gets matched against the
+*complete* release, so half the tracks look missing, the score lands near 70%,
+and the album is either sent to review or imported as two unrelated albums.
 
-DJ-Skippy recognises these, shows them as `Artist/CD1` rather than a bare
-`CD1`, and tells you the real fix: tag the **parent** folder so both discs
-import as one album. Press `4`, navigate to it, press `t`.
+The importer groups discs into the album they belong to before beets ever sees
+them, including the awkward shapes real libraries contain:
+
+| On disk | Imported as |
+|---|---|
+| `Album/CD1` + `Album/CD2` | one album |
+| `Album/CD1` + `Album/CD2 - Live In Madrid` | one album |
+| `Album/Disc 1` holding its own tracks *and* `Disc 2`, `Disc 3` | one album |
+| `Artist/CD1` + `Artist/CD2` with no album folder | one album |
+| `Album/` with its own tracks plus a `Disc 2` bonus folder | one album |
+
+On the real library here that turned 179 import units into 128, with every
+file accounted for exactly once.
+
+A bare number counts as a disc only at one or two digits — `1999` is a Prince
+album, not disc one thousand nine hundred and ninety-nine.
 
 Keys: `Enter` opens it, `X` retries everything, `D` dismisses an entry. The
 guidance panel follows your cursor.

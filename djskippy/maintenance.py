@@ -14,6 +14,7 @@ invoke them - but the user never types one.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -55,45 +56,152 @@ class AlbumFolder:
         return f"{name}   ({state})"
 
 
-def scan_album_folders(music_dir: Path) -> list[AlbumFolder]:
-    """Every directory under music_dir that directly contains audio files.
+#: Folder names that denote a disc within a release rather than a release.
+#: "CD1", "Disc 2", "CD 2 (320)", "CD 1 (L)", "Vol. 3", or a bare number.
+DISC_PATTERN = re.compile(
+    # A bare number is a disc only at 1-2 digits. Longer ones are years,
+    # and "1999" is an album rather than disc one thousand nine hundred
+    # and ninety-nine.
+    r"^(?:(?:cd|disc|disk|vol(?:ume)?)[\s._-]*\d+|\d{1,2})"
+    # Optional trailing detail, but only when clearly separated:
+    # "CD 2 (320)", "CD 1 [L]", "CD2 - Live In Madrid", "Disc 1 — Bonus".
+    r"\s*(?:\(.*\)|\[.*\]|[-–—:]\s*.+)?$",
+    re.IGNORECASE,
+)
 
-    Directly, not recursively: an artist folder holding album subfolders is not
-    itself an album, but a multi-disc release's CD1/CD2 folders are each
-    treated as one, which is what beets expects.
-    """
-    found: list[AlbumFolder] = []
-    music_dir = Path(music_dir)
-    if not music_dir.is_dir():
-        return found
 
-    for directory in sorted(
-        p for p in music_dir.rglob("*") if p.is_dir()
-    ):
-        try:
-            count = sum(
-                1
-                for entry in directory.iterdir()
-                if entry.is_file() and entry.suffix.lower() in AUDIO_SUFFIXES
-            )
-        except OSError:
-            continue
-        if count:
-            found.append(AlbumFolder(path=directory, audio_count=count))
+def is_disc_folder(path: Path) -> bool:
+    """Is this folder one disc of a set, rather than an album in itself?"""
+    return bool(DISC_PATTERN.match(Path(path).name.strip()))
 
-    # The music folder itself may hold loose files.
+
+def _audio_count(directory: Path) -> int:
     try:
-        loose = sum(
+        return sum(
             1
-            for entry in music_dir.iterdir()
+            for entry in directory.iterdir()
             if entry.is_file() and entry.suffix.lower() in AUDIO_SUFFIXES
         )
-        if loose:
-            found.append(AlbumFolder(path=music_dir, audio_count=loose))
     except OSError:
-        pass
+        return 0
 
-    return found
+
+def audio_files_for(folder: Path) -> list[str]:
+    """The audio belonging to one album folder.
+
+    Usually the files directly inside it. For a collapsed multi-disc parent
+    there are none there, so the disc subdirectories are used instead -
+    without that, such an album could never be recognised as imported and
+    would be offered again on every scan.
+    """
+    folder = Path(folder)
+    try:
+        direct = [
+            str(entry)
+            for entry in folder.iterdir()
+            if entry.is_file() and entry.suffix.lower() in AUDIO_SUFFIXES
+        ]
+    except OSError:
+        return []
+    # Disc subfolders belong to this album too, however deeply they nest -
+    # one real rip has "Greatest Hits/Disc 1" holding both its own tracks and
+    # Disc 2, 3 and 4 beneath it.
+    nested: list[str] = []
+
+    def walk(node: Path) -> None:
+        try:
+            children = sorted(node.iterdir())
+        except OSError:
+            return
+        for child in children:
+            if not child.is_dir() or not is_disc_folder(child):
+                continue
+            try:
+                nested.extend(
+                    str(entry)
+                    for entry in sorted(child.iterdir())
+                    if entry.is_file()
+                    and entry.suffix.lower() in AUDIO_SUFFIXES
+                )
+            except OSError:
+                continue
+            walk(child)
+
+    walk(folder)
+    return direct + nested
+
+
+def scan_album_folders(music_dir: Path) -> list[AlbumFolder]:
+    """Every directory that represents one album.
+
+    Directories holding audio directly are albums - except when they are the
+    discs of a set. `Sigh No More (2CD)/CD 1` and `.../CD 2` are two halves of
+    one release, and handing them to beets separately is actively harmful:
+    each disc is matched against the *complete* release, so half the tracks
+    look missing, the score lands near 70%, and the album ends up in review
+    or, worse, imported as two unrelated albums.
+
+    So a parent whose audio-bearing children are all disc folders is returned
+    in their place. beets understands multi-disc directories natively when
+    given the parent.
+    """
+    music_dir = Path(music_dir)
+    if not music_dir.is_dir():
+        return []
+
+    with_audio: dict[Path, int] = {}
+    try:
+        candidates = [p for p in music_dir.rglob("*") if p.is_dir()]
+    except OSError:
+        candidates = []
+
+    for directory in candidates:
+        count = _audio_count(directory)
+        if count:
+            with_audio[directory] = count
+
+    # Collapse disc folders into the album they belong to. For each one, walk
+    # up past any further disc-named ancestors until a real album folder is
+    # reached - that is the unit to hand beets.
+    handled: set[Path] = set()
+    anchors: set[Path] = set()
+
+    for directory in sorted(with_audio):
+        if not is_disc_folder(directory):
+            continue
+
+        anchor = directory.parent
+        while anchor != music_dir and is_disc_folder(anchor):
+            anchor = anchor.parent
+        if anchor == music_dir:
+            # A disc folder sitting loose at the top level has no album to
+            # belong to; leave it as its own unit rather than swallowing the
+            # entire library into one import.
+            continue
+
+        anchors.add(anchor)
+        handled.add(directory)
+
+    # The anchor itself may hold audio directly (an album with a bonus disc),
+    # in which case it is replaced rather than duplicated.
+    handled |= anchors
+
+    found = [
+        AlbumFolder(path=path, audio_count=count)
+        for path, count in with_audio.items()
+        if path not in handled
+    ]
+    for anchor in anchors:
+        found.append(
+            AlbumFolder(path=anchor, audio_count=len(audio_files_for(anchor)))
+        )
+
+    # The music folder itself may hold loose files.
+    loose = _audio_count(music_dir)
+    if loose:
+        found.append(AlbumFolder(path=music_dir, audio_count=loose))
+
+    return sorted(found, key=lambda f: str(f.path).lower())
 
 
 def find_unimported_albums(
@@ -108,13 +216,8 @@ def find_unimported_albums(
     out: list[AlbumFolder] = []
 
     for folder in scan_album_folders(music_dir):
-        try:
-            files = [
-                str(entry)
-                for entry in folder.path.iterdir()
-                if entry.is_file() and entry.suffix.lower() in AUDIO_SUFFIXES
-            ]
-        except OSError:
+        files = audio_files_for(folder.path)
+        if not files:
             continue
         folder.imported = sum(1 for f in files if f in known)
         if folder.fully_imported:

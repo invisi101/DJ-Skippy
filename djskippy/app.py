@@ -36,6 +36,7 @@ from .maintenance import (
     CommandResult,
     check_musicbrainz,
     find_unimported_albums,
+    is_disc_folder,
 )
 from .playlists import PlaylistStore
 from .tagger import Tagger, TaggerRequest
@@ -95,18 +96,11 @@ class ReviewItem:
         ],
     }
 
-    #: Folder names that identify a disc rather than an album. On their own
-    #: they say nothing useful, and they change what the right fix is.
-    DISC_PATTERN = re.compile(
-        # "CD1", "Disc 2", "CD 2 (320)", "CD 1 (L)", "Vol. 3", bare "1"
-        r"^(?:(?:cd|disc|disk|vol(?:ume)?)[\s._-]*\d+|\d+)"
-        r"\s*(?:\(.*\)|\[.*\])?$",
-        re.IGNORECASE,
-    )
-
     @property
     def is_disc_folder(self) -> bool:
-        return bool(self.DISC_PATTERN.match(self.path.name.strip()))
+        """Defined in maintenance.py so the scanner and the review view
+        cannot disagree about what counts as a disc."""
+        return is_disc_folder(self.path)
 
     @property
     def display_name(self) -> str:
