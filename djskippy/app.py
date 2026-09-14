@@ -28,6 +28,7 @@ from .cava import CavaVisualiser
 from .config import Config, load_state, save_state
 from .library import Library, Track
 from .player import Player, RepeatMode
+from .maintenance import BeetsCommand, CommandResult, find_unimported_albums
 from .playlists import PlaylistStore
 from .tagger import Tagger, TaggerRequest
 
@@ -38,7 +39,8 @@ class View(IntEnum):
     QUEUE = 3
     BROWSER = 4
     REVIEW = 5
-    HELP = 6
+    IMPORT = 6
+    HELP = 7
 
 
 # --------------------------------------------------------------------------
@@ -362,7 +364,8 @@ DJ-Skippy — keys
     :             command mode
 
   VIEWS
-    1 Library   2 Playlist   3 Queue   4 Browser   5 Review   6 Help
+    1 Library   2 Playlist   3 Queue   4 Browser
+    5 Review    6 Import     7 Help
 
   TRANSPORT (cmus)
     space         play / pause
@@ -391,6 +394,15 @@ DJ-Skippy — keys
   TOGGLES
     V             visualiser      A   album art      w   web player
     ?             this help       q   quit
+
+  IMPORT & MAINTENANCE  (view 6 — you never need a beets command)
+    I             import every album on disk that is not in the library yet
+    enter         tag just the highlighted folder, interactively
+    D             find duplicates          M   albums with missing tracks
+    R             re-sync tags from MusicBrainz
+    F             download missing album art
+    esc           stop a running import
+    :dup  :missing  :mbsync  :fetchart  :stats  :import [path]
 
   AUTOMATIC IMPORT
     New albums dropped into your music folder are detected, allowed to
@@ -458,6 +470,9 @@ class DJSkippy(App):
         self._auto_tagging = False
         self.review_queue: list[Path] = []
         self._picking_playlist = False
+        self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
+        self._unimported: list = []
+        self._bulk_running = False
 
     # -- layout ----------------------------------------------------------
 
@@ -813,6 +828,12 @@ class DJSkippy(App):
                          "  tagged automatically. Anything ambiguous lands",
                          "  here instead of being guessed at.", ""]
                 self._panes[2].set_items(empty, empty)
+        elif view is View.IMPORT:
+            self._panes[0].display = False
+            self._panes[1].display = False
+            self._panes[2].display = True
+            self._panes[2].pane_title = "Import & maintenance"
+            self._refresh_import_view()
         elif view is View.HELP:
             self._panes[0].display = False
             self._panes[1].display = False
@@ -895,7 +916,7 @@ class DJSkippy(App):
             self.player.seek(30)
 
         # -- views
-        elif key in "123456":
+        elif key in "1234567":
             self._set_view(View(int(key)))
 
         # -- transport
@@ -950,6 +971,19 @@ class DJSkippy(App):
                 self._set_view(View.PLAYLIST)
         elif key == "t":
             self._start_tagging()
+        elif key == "I":
+            self._import_everything()
+        elif key == "D" and self.view is View.IMPORT:
+            self._run_beets_op("duplicates")
+        elif key == "M" and self.view is View.IMPORT:
+            self._run_beets_op("missing")
+        elif key == "R" and self.view is View.IMPORT:
+            self._run_beets_op("mbsync")
+        elif key == "F" and self.view is View.IMPORT:
+            self._run_beets_op("fetchart")
+        elif key == "escape" and self.tagger.running:
+            self.tagger.abort()
+            self.notify_status("import aborted")
         elif key == "S":
             self._save_playlist_prompt()
         elif key == "p":
@@ -1005,6 +1039,12 @@ class DJSkippy(App):
             if isinstance(selected, PlaylistInfo):
                 self._picking_playlist = False
                 self._load_playlist(selected.name)
+            return
+
+        if self.view is View.IMPORT:
+            selected = self._panes[2].selected
+            if isinstance(selected, Path):
+                self._start_tagging(str(selected))
             return
 
         if self.view is View.REVIEW:
@@ -1122,7 +1162,20 @@ class DJSkippy(App):
         elif cmd == "add":
             self._command_add(arg)
         elif cmd == "import":
-            self._start_tagging(arg or None)
+            if arg:
+                self._start_tagging(arg)
+            else:
+                self._import_everything()
+        elif cmd in ("dup", "duplicates"):
+            self._run_beets_op("duplicates")
+        elif cmd == "missing":
+            self._run_beets_op("missing")
+        elif cmd == "mbsync":
+            self._run_beets_op("mbsync")
+        elif cmd == "fetchart":
+            self._run_beets_op("fetchart")
+        elif cmd == "stats":
+            self._run_beets_op("stats")
         elif cmd in ("save", "w"):
             self._save_playlist(arg)
         elif cmd in ("load", "open"):
@@ -1188,6 +1241,126 @@ class DJSkippy(App):
         else:
             self.notify_status(f"unknown setting: {key}")
 
+    # -- bulk import and beets operations --------------------------------
+
+    def _refresh_import_view(self) -> None:
+        """Populate the Import view with what is and is not in the library."""
+        self._unimported = find_unimported_albums(
+            self.cfg.library.music_dir, self.library
+        )
+        on_disk_tracks = sum(f.audio_count for f in self._unimported)
+
+        lines = [
+            f"  Library:   {self.library.track_count} tracks tagged "
+            f"({self.library.backend})",
+            f"  Waiting:   {len(self._unimported)} album folders, "
+            f"{on_disk_tracks} tracks not yet in the library",
+            "",
+        ]
+
+        if self.tagger.running:
+            lines.append(f"  RUNNING — {self.tagger.current_album}")
+            lines.append(f"  {self.tagger.progress}")
+            lines.append("  press Esc to stop")
+        elif self._unimported:
+            lines.append("  press I to import all of it")
+            lines.append(
+                f"  matches at or above {self.cfg.watcher.auto_threshold:.0f}% are "
+                "applied automatically;"
+            )
+            lines.append("  anything weaker goes to Review (5) for you to decide")
+        else:
+            lines.append("  Everything on disk is in the library.")
+
+        lines.extend([
+            "",
+            "  MAINTENANCE  (no terminal required)",
+            "    D  find duplicates        M  albums with missing tracks",
+            "    R  re-sync tags from MusicBrainz   F  fetch missing art",
+            "",
+            "  ALBUM FOLDERS NOT YET IMPORTED",
+        ])
+
+        meta: list[Any] = [None] * len(lines)
+        for folder in self._unimported:
+            lines.append(f"    {folder.label}")
+            meta.append(folder.path)
+
+        self._panes[2].set_items(lines, meta)
+
+    def _import_everything(self) -> None:
+        """I — tag every album folder that is not yet in the library."""
+        if self.tagger.running:
+            self.notify_status("an import is already running")
+            return
+
+        self._unimported = find_unimported_albums(
+            self.cfg.library.music_dir, self.library
+        )
+        if not self._unimported:
+            self.notify_status("everything on disk is already in the library")
+            return
+
+        paths = [str(f.path) for f in self._unimported]
+        tracks = sum(f.audio_count for f in self._unimported)
+
+        # Unattended: apply confident matches, park the rest in Review.
+        self._auto_tagging = True
+        self._bulk_running = True
+        self.tagger.start(paths)
+        self._set_view(View.IMPORT)
+        self.notify_status(
+            f"importing {len(paths)} albums ({tracks} tracks) — "
+            f"≥{self.cfg.watcher.auto_threshold:.0f}% applied, rest to Review"
+        )
+        self.set_interval(1.0, self._tick_import, name="import-progress")
+
+    def _tick_import(self) -> None:
+        if self.view is View.IMPORT:
+            self._refresh_import_view()
+        if self._bulk_running and not self.tagger.running:
+            self._bulk_running = False
+            self._finish_tagging()
+
+    def _run_beets_op(self, name: str) -> None:
+        """Run one of beets' maintenance commands and show its output."""
+        if self.beets_cmd.running:
+            self.notify_status(f"{self.beets_cmd.current} is already running")
+            return
+        if self.tagger.running:
+            self.notify_status("wait for the import to finish first")
+            return
+        if self.beets_cmd.start(name):
+            _, description = BeetsCommand.OPERATIONS[name]
+            self.notify_status(f"running {name} — {description}…")
+            self._set_view(View.IMPORT)
+            self._panes[2].pane_title = f"{name} — working…"
+            self._panes[2].set_items([f"  running {name}…"], [None])
+        else:
+            self.notify_status(f"could not run {name}")
+
+    def _on_beets_done(self, result: CommandResult) -> None:
+        """Called from the command thread."""
+        try:
+            self.call_from_thread(self._show_beets_result, result)
+        except Exception:
+            pass
+
+    def _show_beets_result(self, result: CommandResult) -> None:
+        self._set_view(View.IMPORT)
+        self._panes[2].pane_title = f"{result.name} — result"
+        if result.error:
+            lines = [f"  {result.name} failed: {result.error}"]
+        elif not result.lines:
+            lines = [f"  {result.name}: nothing to report."]
+        else:
+            lines = [f"  {result.name} — {len(result.lines)} line(s)", ""]
+            lines += ["  " + line for line in result.lines]
+        self._panes[2].set_items(lines, [None] * len(lines))
+        self.notify_status(f"{result.name} finished")
+        if result.name in ("fetchart", "mbsync"):
+            self.library.load()
+
     # -- playlists -------------------------------------------------------
 
     def _save_playlist_prompt(self) -> None:
@@ -1222,6 +1395,9 @@ class DJSkippy(App):
             return
         self.player.set_playlist(tracks, 0)
         self._picking_playlist = False
+        self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
+        self._unimported: list = []
+        self._bulk_running = False
         self._set_view(View.PLAYLIST)
         self.notify_status(f"playing “{name}” — {len(tracks)} tracks")
 

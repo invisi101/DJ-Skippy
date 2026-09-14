@@ -82,7 +82,8 @@ async def main() -> int:
         print("\nviews")
         for key, view in (("2", View.PLAYLIST), ("3", View.QUEUE),
                           ("4", View.BROWSER), ("5", View.REVIEW),
-                          ("6", View.HELP), ("1", View.LIBRARY)):
+                          ("6", View.IMPORT), ("7", View.HELP),
+                          ("1", View.LIBRARY)):
             await pilot.press(key)
             check(f"view {key} = {view.name}", app.view is view)
 

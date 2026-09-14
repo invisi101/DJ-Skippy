@@ -78,6 +78,11 @@ class Tagger:
         self.error: str | None = None
         self.stats = {"imported": 0, "skipped": 0, "asis": 0}
 
+        # Progress across a bulk run.
+        self.total_paths = 0
+        self.decisions = 0
+        self.current_album = ""
+
     # -- public API ------------------------------------------------------
 
     def start(self, paths: list[str]) -> bool:
@@ -87,6 +92,9 @@ class Tagger:
         self._abort = False
         self.error = None
         self.stats = {"imported": 0, "skipped": 0, "asis": 0}
+        self.total_paths = len(paths)
+        self.decisions = 0
+        self.current_album = ""
         self._thread = threading.Thread(
             target=self._run, args=(paths,), name="dj-skippy-tagger", daemon=True
         )
@@ -103,6 +111,18 @@ class Tagger:
     def abort(self) -> None:
         self._abort = True
         self.respond("skip")
+
+    @property
+    def progress(self) -> str:
+        """Human-readable progress for a bulk run."""
+        if not self.running and not self.decisions:
+            return ""
+        stats = self.stats
+        head = f"{self.decisions}/{self.total_paths}" if self.total_paths > 1 else ""
+        return (
+            f"{head}  tagged {stats['imported']}  "
+            f"as-is {stats['asis']}  skipped {stats['skipped']}"
+        ).strip()
 
     # -- importer plumbing -----------------------------------------------
 
@@ -141,6 +161,8 @@ class Tagger:
         """Publish a decision request and block until the UI answers."""
         if self._abort:
             return "skip"
+        self.decisions += 1
+        self.current_album = Path(request.path).name
         self.current = request
         self._answered.clear()
         self._on_request(request)

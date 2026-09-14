@@ -18,7 +18,7 @@ are borrowed from cmus, which got them right.
 ▂▅▇▃▂▆█▅▃▁▄▇▆▂▅█▃▁▄▆▇▃▂▅▆█▄▂▁▃▅▇▆▄▂▁▃▅▇█▆▄▂▁▃▄▆▇▅▃▁▂▄
 ▶ The Old Main Drag — The Pogues (FLAC)
   1:12 ━━━━━━━━╸───────────────── 3:32   vol 80%  shuffle
- 1:Library  2:Playlist  3:Queue  4:Browser  5:Review  6:Help
+ 1:Library 2:Playlist 3:Queue 4:Browser 5:Review 6:Import 7:Help
 ```
 
 ---
@@ -30,6 +30,7 @@ are borrowed from cmus, which got them right.
 - [Keys](#keys)
 - [The library](#the-library)
 - [Playlists](#playlists)
+- [Importing your library](#importing-your-library)
 - [Automatic importing](#automatic-importing)
 - [Tagging by hand](#tagging-by-hand)
 - [Album art](#album-art)
@@ -42,6 +43,7 @@ are borrowed from cmus, which got them right.
 - [How it works](#how-it-works)
 - [Troubleshooting](#troubleshooting)
 - [Tests](#tests)
+- [Reference docs](#reference-docs)
 
 ---
 
@@ -131,7 +133,8 @@ scans `~/Music` directly, so it works before anything has been imported.
 | `3` | Queue — tracks that jump ahead of the playlist |
 | `4` | Browser — the filesystem, for tagging folders |
 | `5` | Review — albums the auto-importer could not decide alone |
-| `6` | Help |
+| `6` | Import — bulk import and beets maintenance |
+| `7` | Help |
 
 ### Transport — from cmus
 
@@ -161,6 +164,7 @@ behaviour and it is the correct one.
 | `L` | browse saved playlists (`d` deletes, `r` renames) |
 | `p` | add the selection straight to a named playlist |
 | `t` | tag this album from MusicBrainz |
+| `I` | import everything not yet in the library |
 | `d` | remove from playlist / clear queue |
 
 Whatever the cursor is on is what gets used. On an **artist** that means every
@@ -232,6 +236,34 @@ They are different things, and the distinction is the best idea cmus ever had:
   line, and once the queue empties the playlist resumes exactly where it was.
 
 `a` adds to the playlist. `e` adds to the queue.
+
+---
+
+## Importing your library
+
+Press **`6`** for the Import view. It tells you how much of what is on disk is
+actually in the library, and lists every album folder that is not.
+
+| Key | Action |
+|---|---|
+| `I` | **import everything** that is not in the library yet |
+| `Enter` | tag just the highlighted folder, interactively |
+| `Esc` | stop a running import |
+| `D` | find duplicates |
+| `M` | albums with tracks missing |
+| `R` | re-sync tags from MusicBrainz |
+| `F` | download missing album art |
+
+`I` runs unattended under the same confidence gate as the watcher: matches at
+or above 90% are applied, everything weaker goes to Review (`5`). Progress is
+shown live, and `Esc` stops it at any point — already-tagged albums stay
+tagged.
+
+The same operations exist as commands: `:import`, `:dup`, `:missing`,
+`:mbsync`, `:fetchart`, `:stats`.
+
+**You should never need to type a `beet` command.** If you want to anyway,
+there is a full guide in [docs/BEETS.md](docs/BEETS.md).
 
 ---
 
@@ -533,6 +565,18 @@ it above 100 sends everything there.
 `smoke.py` drives the real application through Textual's test harness with no
 terminal. `integration.py` plays a few seconds of actual audio and needs a
 sound device, a session D-Bus, and a free port.
+
+---
+
+## Reference docs
+
+- **[docs/BEETS.md](docs/BEETS.md)** — working guide to beets: importing,
+  queries, fixing tags, and the non-obvious configuration traps (the
+  `musicbrainz` plugin disabling itself, the data-source penalty that costs
+  every album 11%, the web plugin's broken paths).
+- **[docs/CMUS.md](docs/CMUS.md)** — working guide to cmus: views, keys,
+  filters, ReplayGain, `cmus-remote`, and why its config file rejects trailing
+  comments.
 
 ---
 
