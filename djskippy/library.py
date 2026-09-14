@@ -30,7 +30,13 @@ AUDIO_SUFFIXES = {
 
 @dataclass(frozen=True)
 class Track:
-    """One playable item, normalised across both library backends."""
+    """One playable item.
+
+    `tagged` records whether this came from beets - that is, whether it
+    carries MusicBrainz metadata - or was read straight from the file. The
+    distinction is shown in the interface rather than hidden: music plays
+    either way, and knowing which is which is the user's business.
+    """
 
     id: int
     path: str
@@ -44,6 +50,7 @@ class Track:
     year: int
     genre: str
     format: str
+    tagged: bool = False
 
     @property
     def display_title(self) -> str:
@@ -81,27 +88,72 @@ def sort_key(name: str, smart: bool = True) -> str:
 class Library:
     """Artist -> album -> track view over whichever backend is available."""
 
-    def __init__(self, music_dir: Path, smart_sort: bool = True) -> None:
+    def __init__(self, music_dir: Path, smart_sort: bool = True,
+                 scan_disk: bool = True, use_beets: bool = True) -> None:
         self.music_dir = Path(music_dir)
         self.smart_sort = smart_sort
+        #: When False, the beets database is ignored entirely and everything
+        #: comes from the files. DJ-Skippy is a player first; MusicBrainz is
+        #: an enhancement you can decline.
+        self.use_beets = use_beets
         self._tracks: list[Track] = []
         self._beets_lib = None
         self.backend = "empty"
         self.error: str | None = None
-        self.load()
+        #: How much of the library carries MusicBrainz metadata.
+        self.tagged_count = 0
+        self.untagged_count = 0
+        self.load(scan_disk=scan_disk)
 
     # -- loading ---------------------------------------------------------
 
-    def load(self) -> None:
-        """(Re)load the library, preferring beets."""
-        tracks = self._load_from_beets()
-        if tracks:
-            self._tracks = tracks
+    def load(self, scan_disk: bool = True) -> None:
+        """(Re)load the library.
+
+        Everything on disk is included, whether or not beets knows about it.
+        MusicBrainz data is layered over the files that have it rather than
+        replacing the rest - the previous behaviour meant an unimported track
+        was simply invisible, which is the wrong way round for a music player:
+        the music you own is the library, and tagging is an enhancement.
+        """
+        tagged = {t.path: t for t in self._load_from_beets()}
+
+        untagged: list[Track] = []
+        if scan_disk:
+            untagged = [
+                t for t in self._load_from_filesystem() if t.path not in tagged
+            ]
+
+        self._tracks = list(tagged.values()) + untagged
+        self.tagged_count = len(tagged)
+        self.untagged_count = len(untagged)
+
+        if tagged and untagged:
+            self.backend = "beets + disk"
+        elif tagged:
             self.backend = "beets"
+        elif untagged:
+            self.backend = "disk"
         else:
-            self._tracks = self._load_from_filesystem()
-            self.backend = "filesystem" if self._tracks else "empty"
+            self.backend = "empty"
         self._index()
+
+    def merge_from_disk(self) -> int:
+        """Add anything on disk that is not already known. Returns how many.
+
+        Split out so the interface can show the tagged library immediately -
+        which loads in a fraction of a second - and fill in the rest without
+        making the user wait for it.
+        """
+        known = {t.path for t in self._tracks}
+        found = [t for t in self._load_from_filesystem() if t.path not in known]
+        if not found:
+            return 0
+        self._tracks.extend(found)
+        self.untagged_count += len(found)
+        self.backend = "beets + disk" if self.tagged_count else "disk"
+        self._index()
+        return len(found)
 
     @contextmanager
     def _bound(self) -> Iterator[None]:
@@ -120,6 +172,8 @@ class Library:
         yield
 
     def _load_from_beets(self) -> list[Track]:
+        if not self.use_beets:
+            return []
         try:
             from beets import config as beets_config
             from beets.library import Library as BeetsLibrary
@@ -181,6 +235,7 @@ class Library:
                             format=(
                                 _text(item, "format") or Path(path).suffix.lstrip(".")
                             ).upper(),
+                            tagged=True,
                         )
                     )
             return tracks
@@ -308,6 +363,16 @@ class Library:
 
     def artists(self) -> list[str]:
         return self._artists
+
+    def tagged_state(self, artist: str) -> str:
+        """"all", "none" or "some" of this artist carries MusicBrainz data."""
+        tracks = self._by_artist.get(artist, [])
+        if not tracks:
+            return "none"
+        tagged = sum(1 for t in tracks if t.tagged)
+        if tagged == len(tracks):
+            return "all"
+        return "none" if tagged == 0 else "some"
 
     def albums(self, artist: str) -> list[str]:
         """Albums by an artist, oldest first - the order a listener thinks in."""

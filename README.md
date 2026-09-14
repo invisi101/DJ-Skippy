@@ -190,18 +190,39 @@ track.
 
 ## The library
 
-DJ-Skippy has two backends and picks automatically:
+**Everything in your music folder is in the library**, whether or not it has
+ever been tagged. MusicBrainz data is layered over the files that have it
+rather than replacing the rest — a music player should show you the music you
+own, and tagging is an enhancement on top.
 
-1. **beets** — when `music_dir` is the folder beets manages and its database
-   has tracks in it. Preferred, because it holds proper MusicBrainz metadata.
-2. **Filesystem scan** — reads tags directly with mutagen. Used for any other
-   folder, so `--music-dir /mnt/usb` shows that drive rather than your beets
-   library, and DJ-Skippy is useful on untagged music.
+The interface marks where each entry's metadata came from:
 
-For files with no tags at all, the folder layout is read instead:
-`Artist/Album/track.flac` gives you a browsable library from nothing. Disc
-folders are stepped over, so `Artist/Album/CD2/track.flac` still reports the
-album rather than "CD2".
+| Mark | Meaning |
+|---|---|
+| *(blank)* | tagged from MusicBrainz |
+| `·` | read from the file itself |
+| `◐` | partly tagged — some tracks of this album or artist, not all |
+
+The status line carries the totals, e.g. `1390 tagged · 1553 untagged`.
+
+Startup loads the tagged set first — a fraction of a second — and merges the
+rest of the disk in behind the interface, so you are never waiting on a scan.
+
+For files with no useful tags, the folder layout is read: `Artist/Album/track`
+gives a browsable library from nothing. Disc folders are stepped over, so
+`Artist/Album/CD2/track` still reports the album rather than "CD2".
+
+### Turning MusicBrainz off
+
+```toml
+[library]
+musicbrainz = false
+```
+
+Nothing is looked up, nothing is imported, no database is kept, and the
+watcher does not run. Every track still plays, the library still builds from
+your files, and the Import view explains that it is switched off rather than
+offering work it will not do.
 
 The status line tells you which is in use. `:reload` rescans.
 
@@ -697,6 +718,7 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/transport_test.py # next/prev/queue/shuffle/repeat
 ./.venv/bin/python tests/locking_test.py   # one library operation at a time
 ./.venv/bin/python tests/soak_test.py      # memory and drift over a long session
+./.venv/bin/python tests/optional_musicbrainz_test.py  # plays with or without it
 ./.venv/bin/python tests/robustness_test.py # hostile filesystems
 ./.venv/bin/python tests/equivalence_test.py # behaves as beets does
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL

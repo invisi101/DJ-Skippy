@@ -21,6 +21,7 @@ from typing import Any, Sequence
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
@@ -585,8 +586,17 @@ class DJSkippy(App):
     def __init__(self, config: Config | None = None) -> None:
         super().__init__()
         self.cfg = config or Config.load()
+        # Load only what beets knows at first - a fraction of a second -
+        # and merge the rest of the disk in behind the interface. Scanning
+        # a few thousand files takes seconds, and a music player should not
+        # make you watch a progress bar before it will show you your music.
         self.library = Library(
-            self.cfg.library.music_dir, self.cfg.library.smart_artist_sort
+            self.cfg.library.music_dir,
+            self.cfg.library.smart_artist_sort,
+            # Without MusicBrainz there is no tagged set to show first, so
+            # scan the disk straight away.
+            scan_disk=not self.cfg.library.musicbrainz,
+            use_beets=self.cfg.library.musicbrainz,
         )
         self.player = Player(
             volume=self.cfg.playback.volume,
@@ -691,10 +701,15 @@ class DJSkippy(App):
             self._start_web()
         if self.cfg.mpris.enabled:
             await self._start_mpris()
-        if self.cfg.watcher.enabled:
+        if self.cfg.watcher.enabled and self.cfg.library.musicbrainz:
             self._start_watcher()
         if self.cfg.playback.resume:
             self._restore_state()
+        if self.cfg.library.musicbrainz:
+            self._merge_disk_in_background()
+        # Always describe the library, even when every optional service is
+        # switched off - otherwise the status line is simply blank.
+        self._update_services()
 
     def _install_signal_handlers(self) -> None:
         """Exit cleanly when the terminal goes away.
@@ -845,8 +860,35 @@ class DJSkippy(App):
             pass
         self.tagger.start([str(path)])
 
+    @work(thread=True, exclusive=True)
+    def _merge_disk_in_background(self) -> None:
+        """Bring in everything on disk that beets has not tagged."""
+        added = self.library.merge_from_disk()
+        if added:
+            self.call_from_thread(self._after_disk_merge, added)
+
+    def _after_disk_merge(self, added: int) -> None:
+        cursor = self._panes[0].cursor
+        self._refresh_library()
+        self._panes[0].move_to(cursor)
+        self._update_services()
+        self.notify_status(
+            f"found {added} more track(s) on disk — "
+            f"{self.library.tagged_count} tagged, "
+            f"{self.library.untagged_count} from the files"
+        )
+
     def _update_services(self) -> None:
-        parts = []
+        if not self.cfg.library.musicbrainz:
+            parts = [f"{self.library.track_count} tracks · MusicBrainz off"]
+        elif self.library.tagged_count:
+            parts = [
+                f"{self.library.tagged_count} tagged"
+                + (f" · {self.library.untagged_count} untagged"
+                   if self.library.untagged_count else "")
+            ]
+        else:
+            parts = [f"{self.library.track_count} tracks · none tagged yet"]
         if self.web is not None and self.web.running:
             parts.append(self.web.url)
         if self.mpris is not None and self.mpris.active:
@@ -900,7 +942,12 @@ class DJSkippy(App):
         if hasattr(self, "_browser_index"):
             del self._browser_index
         artists = self.library.artists()
-        self._panes[0].set_items(artists, artists)
+        labels = []
+        for artist in artists:
+            state = self.library.tagged_state(artist)
+            mark = {"all": " ", "none": "·", "some": "◐"}[state]
+            labels.append(f"{mark} {artist}")
+        self._panes[0].set_items(labels, artists)
         self._refresh_albums()
 
     def _refresh_albums(self) -> None:
@@ -913,7 +960,17 @@ class DJSkippy(App):
         labels = []
         for album in albums:
             year = self.library.album_year(artist, album)
-            labels.append(f"{year}  {album}" if year else album)
+            tracks = self.library.tracks(artist, album)
+            tagged = sum(1 for t in tracks if t.tagged)
+            if tagged == len(tracks):
+                mark = " "          # fully from MusicBrainz
+            elif tagged == 0:
+                mark = "·"          # entirely from the files
+            else:
+                mark = "◐"          # part tagged
+            labels.append(
+                f"{mark} {year}  {album}" if year else f"{mark} {album}"
+            )
         self._panes[1].set_items(labels, albums)
         self._refresh_tracks()
 
@@ -924,11 +981,16 @@ class DJSkippy(App):
             self._panes[2].set_items([], [])
             return
         tracks = self.library.tracks(artist, album)
-        width = max(20, self._panes[2].size.width - 12)
-        labels = [
-            f"{t.display_title[: width - 8].ljust(width - 8)} {t.length_str:>6}"
-            for t in tracks
-        ]
+        width = max(20, self._panes[2].size.width - 14)
+        labels = []
+        for t in tracks:
+            # A dot marks metadata that came from the file itself rather than
+            # MusicBrainz. It plays exactly the same; you just know which.
+            mark = " " if t.tagged else "·"
+            labels.append(
+                f"{mark} {t.display_title[: width - 8].ljust(width - 8)} "
+                f"{t.length_str:>6}"
+            )
         self._panes[2].set_items(labels, tracks)
         self._sync_marker()
 
@@ -1693,6 +1755,28 @@ class DJSkippy(App):
 
     def _refresh_import_view(self) -> None:
         """Populate the Import view with what is and is not in the library."""
+        if not self.cfg.library.musicbrainz:
+            lines = [
+                "",
+                "  MusicBrainz is switched off.",
+                "",
+                f"  DJ-Skippy is playing all {self.library.track_count} tracks",
+                "  using the tags already in your files. Nothing is looked up,",
+                "  nothing is imported, and no database is kept.",
+                "",
+                "  To turn it on, set this in",
+                "  ~/.config/dj-skippy/config.toml:",
+                "",
+                "      [library]",
+                "      musicbrainz = true",
+                "",
+                "  Then albums can be looked up and tagged properly, and the",
+                "  interface marks which tracks carry MusicBrainz data.",
+                "",
+            ]
+            self._panes[2].set_items(lines, [None] * len(lines))
+            return
+
         self._unimported = find_unimported_albums(
             self.cfg.library.music_dir, self.library
         )
@@ -1759,6 +1843,12 @@ class DJSkippy(App):
 
     def _import_everything(self) -> None:
         """i — tag every album folder that is not yet in the library."""
+        if not self.cfg.library.musicbrainz:
+            self.notify_status(
+                "MusicBrainz is off — set musicbrainz = true in "
+                "~/.config/dj-skippy/config.toml to enable tagging"
+            )
+            return
         if self.tagger.running:
             self.notify_status("an import is already running")
             return
@@ -1823,6 +1913,9 @@ class DJSkippy(App):
 
     def _run_beets_op(self, name: str) -> None:
         """Run one of beets' maintenance commands and show its output."""
+        if not self.cfg.library.musicbrainz:
+            self.notify_status("MusicBrainz is off — nothing to maintain")
+            return
         if self.beets_cmd.running:
             self.notify_status(f"{self.beets_cmd.current} is already running")
             return
@@ -2008,6 +2101,12 @@ class DJSkippy(App):
     # -- tagging ---------------------------------------------------------
 
     def _start_tagging(self, path: str | None = None) -> None:
+        if not self.cfg.library.musicbrainz:
+            self.notify_status(
+                "MusicBrainz is off — set musicbrainz = true in "
+                "~/.config/dj-skippy/config.toml to enable tagging"
+            )
+            return
         if self.tagger.running:
             self.notify_status("tagger already running")
             return

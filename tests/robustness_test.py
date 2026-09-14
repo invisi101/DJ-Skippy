@@ -124,7 +124,7 @@ def main() -> int:
         print("\nbuilding a library from it")
         with Timeout(120):
             lib = Library(root, True)
-        check("library builds", lib.backend in ("filesystem", "empty"),
+        check("library builds", lib.backend in ("disk", "empty"),
               f"{lib.backend}, {lib.track_count} tracks")
         check("zero-byte file did not crash the scan", True)
         for t in lib.all_tracks:
@@ -170,7 +170,7 @@ def main() -> int:
             with Timeout(60):
                 other = Library(elsewhere, True)
             check("a different folder is scanned, not the beets library",
-                  other.backend == "filesystem" and other.track_count == 1,
+                  other.backend == "disk" and other.track_count == 1,
                   f"{other.backend}, {other.track_count} tracks")
             check("and it says why", bool(other.error), other.error or "")
         finally:

@@ -213,7 +213,11 @@ def find_unimported_albums(
     `include_partial` keeps folders that are only half-imported, which is the
     usual state after an interrupted run.
     """
-    known = {t.path for t in library.all_tracks}
+    # "Imported" means tagged by beets, not merely present in the library.
+    # The library now lists everything on disk - untagged files included -
+    # so checking membership would report the whole collection as done and
+    # importing would silently have nothing to do.
+    known = {t.path for t in library.all_tracks if t.tagged}
     out: list[AlbumFolder] = []
 
     for folder in scan_album_folders(music_dir):

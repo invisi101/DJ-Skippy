@@ -37,6 +37,15 @@ DEFAULT_CONFIG = """\
 # lines, and anything else TOML allows. Delete it and it regenerates.
 
 [library]
+# MusicBrainz enrichment. DJ-Skippy is a music player first: with this off it
+# plays everything in your folder using the tags already in the files, and
+# never contacts MusicBrainz, imports anything, or maintains a beets database.
+#
+# With it on, albums can additionally be looked up and tagged properly, and
+# the interface marks which tracks carry MusicBrainz data (no mark) and which
+# were read from the files themselves (·).
+musicbrainz = true
+
 # Where your music lives. DJ-Skippy reads the beets database when one exists
 # (that is where the MusicBrainz tags are) and falls back to scanning this
 # folder directly when it does not.
@@ -157,6 +166,7 @@ def _as_choice(value: Any, allowed: tuple[str, ...], default: str) -> str:
 class LibraryConfig:
     music_dir: Path = Path.home() / "Music"
     smart_artist_sort: bool = True
+    musicbrainz: bool = True
 
 
 @dataclass
@@ -233,6 +243,7 @@ class Config:
         cfg.library = LibraryConfig(
             music_dir=music_dir,
             smart_artist_sort=_as_bool(lib.get("smart_artist_sort"), True),
+            musicbrainz=_as_bool(lib.get("musicbrainz"), True),
         )
 
         pb = data.get("playback", {})

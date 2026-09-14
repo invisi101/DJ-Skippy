@@ -88,19 +88,23 @@ def main() -> int:
 
     cfg = Config.load()
     lib = Library(cfg.library.music_dir, cfg.library.smart_artist_sort)
-    check("DJ-Skippy reads the beets database", lib.backend == "beets",
-          lib.backend)
+    check("DJ-Skippy reads the beets database",
+          lib.backend in ("beets", "beets + disk"), lib.backend)
+    check("and separates tagged from untagged", lib.tagged_count > 0,
+          f"{lib.tagged_count} tagged of {lib.track_count}")
     check("library has content", lib.track_count > 0,
           f"{lib.track_count} tracks")
 
     # Inspect real files for the identifiers beets writes on a successful
-    # MusicBrainz match.
+    # MusicBrainz match. Only the tagged ones: the library now also lists
+    # everything on disk that beets has never seen, which by definition
+    # carries no MusicBrainz identifiers.
     import mutagen
 
     sampled = 0
     with_mbid = 0
     missing_files = 0
-    for track in lib.all_tracks[:400]:
+    for track in [t for t in lib.all_tracks if t.tagged][:400]:
         if not track.exists:
             missing_files += 1
             continue
@@ -136,9 +140,12 @@ def main() -> int:
         if line.lower().startswith("tracks:"):
             cli_tracks = int(line.split(":")[1].strip().replace(",", ""))
             break
-    check("track count agrees with `beet stats`",
-          abs(cli_tracks - lib.track_count) <= 5,
-          f"beets={cli_tracks} dj-skippy={lib.track_count}")
+    # beets counts what it has tagged; DJ-Skippy also lists untagged files,
+    # so the tagged subset is what should agree.
+    check("tagged count agrees with `beet stats`",
+          abs(cli_tracks - lib.tagged_count) <= 5,
+          f"beets={cli_tracks} dj-skippy tagged={lib.tagged_count} "
+          f"(of {lib.track_count} total)")
 
     print("\nthe operations DJ-Skippy exposes are real beets commands")
     from djskippy.maintenance import BeetsCommand
