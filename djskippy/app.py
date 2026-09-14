@@ -28,7 +28,7 @@ from textual.widgets import Input
 from . import art as art_mod
 from .cava import CavaVisualiser, clean_stale_configs
 from .config import Config, load_state, save_state
-from .library import Library, Track
+from .library import AUDIO_SUFFIXES, Library, Track
 from .player import Player, RepeatMode
 from .maintenance import (
     BeetsCommand,
@@ -476,6 +476,13 @@ DJ-Skippy — keys
     p             add selection straight to a named playlist
     :save <name>  :load <name>  :addto <name>  :rename <old> <new>
 
+  BROWSER (4)
+    enter         open a folder, or play a file straight away
+    h             up one folder
+    a  e          add a file, or a whole folder, to playlist / queue
+    t             tag the folder this file is in
+    Nothing here needs to be in your library first.
+
   LIBRARY
     a             append selection to playlist
     e             enqueue selection (plays next, ahead of playlist)
@@ -726,8 +733,7 @@ class DJSkippy(App):
     # -- services --------------------------------------------------------
 
     async def _start_visualiser(self) -> None:
-        width = max(8, self.size.width)
-        self.visualiser.bars = width
+        self.visualiser.bars = self.visualiser._valid_bars(self.size.width)
         ok = await self.visualiser.start()
         if not ok:
             self.notify_status(f"visualiser: {self.visualiser.error}")
@@ -834,6 +840,10 @@ class DJSkippy(App):
     # -- library panes ---------------------------------------------------
 
     def _refresh_library(self) -> None:
+        # Rebuilt lazily by _track_for_path; drop it so the browser picks up
+        # anything that has just been imported.
+        if hasattr(self, "_browser_index"):
+            del self._browser_index
         artists = self.library.artists()
         self._panes[0].set_items(artists, artists)
         self._refresh_albums()
@@ -908,6 +918,14 @@ class DJSkippy(App):
                 return self.library.tracks(artist, album) if artist and album else []
             selected = self._panes[2].selected
             return [selected] if isinstance(selected, Track) else []
+
+        if self.view is View.BROWSER:
+            selected = self._panes[2].selected
+            if isinstance(selected, Track):
+                return [selected]
+            if isinstance(selected, Path) and selected.is_dir():
+                return self._browser_folder_tracks(selected)
+            return []
 
         selected = self._panes[2].selected
         return [selected] if isinstance(selected, Track) else []
@@ -990,8 +1008,9 @@ class DJSkippy(App):
             self._panes[0].display = False
             self._panes[1].display = False
             self._panes[2].display = True
-            self._panes[2].pane_title = f"Browser — {self.cfg.library.music_dir}"
-            self._load_browser(self.cfg.library.music_dir)
+            start = getattr(self, "_browser_dir", self.cfg.library.music_dir)
+            self._panes[2].pane_title = f"Browser — {start}"
+            self._load_browser(start)
         elif view is View.REVIEW:
             self._panes[0].display = False
             self._panes[1].display = False
@@ -1014,18 +1033,86 @@ class DJSkippy(App):
         columns.refresh()
 
     def _load_browser(self, directory: Path) -> None:
+        """List a directory: folders first, then playable audio files.
+
+        Files matter as much as folders here. The whole point of a browser in
+        a music player is to play something that is *not* in your library yet
+        - a USB stick, a download, a folder you have not imported - without
+        having to import it first.
+        """
+        directory = Path(directory)
         try:
-            entries = sorted(
-                [p for p in Path(directory).iterdir() if p.is_dir()],
-                key=lambda p: p.name.lower(),
-            )
+            entries = list(directory.iterdir())
         except OSError as exc:
             self.notify_status(str(exc))
             return
-        labels = [".."] + [f"{p.name}/" for p in entries]
-        meta = [Path(directory).parent] + entries
+
+        folders = sorted(
+            (p for p in entries if p.is_dir()), key=lambda p: p.name.lower()
+        )
+        files = sorted(
+            (
+                p for p in entries
+                if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
+            ),
+            key=lambda p: p.name.lower(),
+        )
+
+        labels: list[str] = [".."]
+        meta: list[Any] = [directory.parent]
+
+        for folder in folders:
+            labels.append(f"{folder.name}/")
+            meta.append(folder)
+
+        width = max(30, self._panes[2].size.width - 14)
+        for path in files:
+            track = self._track_for_path(path)
+            if track.artist and track.artist != "Unknown Artist":
+                label = f"{track.title}  —  {track.artist}"
+            else:
+                label = track.title
+            labels.append(f"{label[:width].ljust(width)} {track.length_str:>6}")
+            meta.append(track)
+
         self._panes[2].set_items(labels, meta)
-        self._browser_dir = Path(directory)
+        self._browser_dir = directory
+        if self.view is View.BROWSER:
+            self._panes[2].pane_title = f"Browser — {directory}"
+
+    def _track_for_path(self, path: Path) -> Track:
+        """Resolve a file to a Track, preferring the library's own entry.
+
+        A file already in the library comes back with its MusicBrainz tags and
+        known duration; anything else is built on the spot from its own tags.
+        """
+        if not hasattr(self, "_browser_index"):
+            self._browser_index = {t.path: t for t in self.library.all_tracks}
+        known = self._browser_index.get(str(path))
+        if known is not None:
+            return known
+
+        from .playlists import _track_from_path
+
+        built = _track_from_path(str(path))
+        if built is not None:
+            return built
+        return Track(
+            id=-1, path=str(path), title=path.stem, artist="", albumartist="",
+            album="", track_no=0, disc_no=0, length=0.0, year=0, genre="",
+            format=path.suffix.lstrip(".").upper(),
+        )
+
+    def _browser_folder_tracks(self, folder: Path) -> list[Track]:
+        """Every playable file directly inside a folder."""
+        try:
+            return [
+                self._track_for_path(p)
+                for p in sorted(folder.iterdir(), key=lambda p: p.name.lower())
+                if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
+            ]
+        except OSError:
+            return []
 
     # -- key handling ----------------------------------------------------
 
@@ -1214,6 +1301,19 @@ class DJSkippy(App):
             selected = self._panes[2].selected
             if isinstance(selected, Path):
                 self._load_browser(selected)
+            elif isinstance(selected, Track):
+                # Play it, and queue the rest of the folder behind it so an
+                # album plays through rather than stopping after one track.
+                siblings = self._browser_folder_tracks(self._browser_dir)
+                index = next(
+                    (i for i, t in enumerate(siblings) if t.path == selected.path), 0
+                )
+                if siblings:
+                    self.player.set_playlist(siblings, index)
+                else:
+                    self.player.play_track(selected)
+                self._art.set_track(selected.path)
+                self.notify_status(f"playing {selected.title}")
             return
 
         if self._picking_playlist:
@@ -1536,16 +1636,32 @@ class DJSkippy(App):
         ]
 
         if self.tagger.running:
-            lines.append(f"  RUNNING — {self.tagger.current_album}")
-            lines.append(f"  {self.tagger.progress}")
-            lines.append("  press Esc to stop")
+            lines.append(f"  ▸ IMPORTING — {self.tagger.current_album}")
+            lines.append(f"    {self.tagger.progress}")
+            lines.append("")
+            lines.append("    Leave it running; it is slow because MusicBrainz")
+            lines.append("    rate-limits to one lookup every few seconds.")
+            lines.append("    Esc stops — everything already tagged stays tagged.")
         elif self._unimported:
-            lines.append("  press I to import all of it")
             lines.append(
-                f"  matches at or above {self.cfg.watcher.auto_threshold:.0f}% are "
-                "applied automatically;"
+                f"  ▸ Press  I  to import all {len(self._unimported)} albums "
+                f"({on_disk_tracks} tracks)."
             )
-            lines.append("  anything weaker goes to Review (5) for you to decide")
+            lines.append("")
+            lines.append("    Each album is looked up on MusicBrainz and its tags")
+            lines.append("    corrected — proper titles, dates, album art, genres.")
+            lines.append(
+                f"    Matches at or above {self.cfg.watcher.auto_threshold:.0f}% "
+                "are applied without asking;"
+            )
+            lines.append("    anything less confident goes to Review (5) for you.")
+            lines.append("")
+            lines.append("    Your files are never moved, renamed or deleted.")
+            lines.append("    Only the tags inside them change. It is safe to stop")
+            lines.append("    at any point with Esc — finished albums stay done.")
+            lines.append("")
+            lines.append("    Or put the cursor on one album below and press enter")
+            lines.append("    to do just that one, deciding each match yourself.")
         else:
             lines.append("  Everything on disk is in the library.")
 
@@ -1783,7 +1899,7 @@ class DJSkippy(App):
         want = (not self._cava.enabled) if force is None else force
         self._cava.enabled = want
         if want:
-            self.visualiser.bars = max(8, self.size.width)
+            self.visualiser.bars = self.visualiser._valid_bars(self.size.width)
             await self.visualiser.start()
         else:
             await self.visualiser.stop()
@@ -1817,7 +1933,12 @@ class DJSkippy(App):
         if target is None:
             if self.view is View.BROWSER:
                 selected = self._panes[2].selected
-                target = str(selected) if isinstance(selected, Path) else None
+                if isinstance(selected, Path):
+                    target = str(selected)
+                elif isinstance(selected, Track):
+                    target = str(Path(selected.path).parent)
+                else:
+                    target = None
             elif self.view is View.LIBRARY:
                 tracks = self._selected_tracks()
                 if tracks:

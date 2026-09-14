@@ -105,8 +105,18 @@ MAX_RANGE = 100
 class CavaVisualiser:
     """Runs cava and exposes the latest frame as a list of 0.0-1.0 levels."""
 
+    @staticmethod
+    def _valid_bars(bars: int) -> int:
+        """cava refuses an odd bar count when the output is stereo.
+
+        "must have even number of bars with stereo output" - so a terminal
+        with an odd width silently disabled the whole visualiser.
+        """
+        bars = max(4, int(bars))
+        return bars - (bars % 2)
+
     def __init__(self, bars: int = 40, framerate: int = 60) -> None:
-        self.bars = max(4, bars)
+        self.bars = self._valid_bars(bars)
         self.framerate = framerate
         self.levels: list[float] = [0.0] * self.bars
         self._process: asyncio.subprocess.Process | None = None
@@ -142,6 +152,8 @@ class CavaVisualiser:
         if not self.available():
             self.error = "cava is not installed"
             return False
+
+        self.bars = self._valid_bars(self.bars)
 
         # PipeWire first since that is what this system runs; pulse is the
         # compatibility fallback and works through pipewire-pulse too.
@@ -272,7 +284,7 @@ class CavaVisualiser:
 
     async def set_bars(self, bars: int) -> None:
         """Change bar count - needs a restart, cava reads it at startup."""
-        bars = max(4, bars)
+        bars = self._valid_bars(bars)
         if bars == self.bars:
             return
         self.bars = bars

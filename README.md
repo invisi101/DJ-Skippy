@@ -31,6 +31,7 @@ are borrowed from cmus, which got them right.
 - [The library](#the-library)
 - [Playlists](#playlists)
 - [Importing your library](#importing-your-library)
+- [The Browser](#the-browser-4)
 - [When something needs you](#when-something-needs-you--review-5)
 - [Automatic importing](#automatic-importing)
 - [Tagging by hand](#tagging-by-hand)
@@ -135,7 +136,7 @@ scans `~/Music` directly, so it works before anything has been imported.
 | `1` | Library — the three-column browser |
 | `2` | Playlist — what is queued to play through |
 | `3` | Queue — tracks that jump ahead of the playlist |
-| `4` | Browser — the filesystem, for tagging folders |
+| `4` | Browser — play anything on disk, imported or not |
 | `5` | Review — albums the auto-importer could not decide alone |
 | `6` | Import — bulk import and beets maintenance |
 | `7` | Help |
@@ -301,6 +302,23 @@ Press **`5`** to see what is waiting, and **`Enter`** on any entry to tag it
 interactively.
 
 Turn the whole thing off with `enabled = false` under `[watcher]`.
+
+---
+
+## The Browser (`4`)
+
+A file browser for playing things that are **not** in your library — a USB
+stick, a download, a folder you have not imported.
+
+| Key | Action |
+|---|---|
+| `Enter` | open a folder, or **play a file immediately** |
+| `h` | up one folder |
+| `a` `e` | add a file, or a whole folder, to the playlist / queue |
+| `t` | tag the folder this file is in |
+
+Playing from here imports nothing and changes nothing. The rest of the folder
+is queued behind whatever you pick, so an album plays through.
 
 ---
 
@@ -567,10 +585,16 @@ loaded and how many tracks it found. `:reload` rescans.
 mpv plays through PipeWire/PulseAudio. Confirm with `mpv --no-video <file>`.
 Check the volume is not at 0 and mute (`m`) is off.
 
-**Visualiser is flat**
-cava captures the *output* device. If nothing is audible, there is nothing to
+**Visualiser is flat or missing**
+cava captures the *output* device, so if nothing is audible there is nothing to
 draw. It needs PipeWire or PulseAudio; on a bare ALSA setup it will not
-capture.
+capture. Any failure is reported in place of the bars — cava's own message,
+not a generic one.
+
+One trap worth knowing: cava refuses an **odd** number of bars when the output
+is stereo ("must have even number of bars with stereo output"). DJ-Skippy
+sizes the bars to your terminal width, so an odd-width window silently
+disabled the whole visualiser. Bar counts are rounded down to even now.
 
 **Album art is blocky**
 That is the half-block fallback. Install `textual-image` into the virtualenv
@@ -620,6 +644,7 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/watcher_test.py   # folder watching and debouncing
 ./.venv/bin/python tests/playlist_test.py  # playlist create/load/rename/delete
 ./.venv/bin/python tests/review_test.py    # review guidance and retry logic
+./.venv/bin/python tests/browser_test.py   # playing files outside the library
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL
 ./.venv/bin/python tests/integration.py    # real audio, cava, web, D-Bus
 ```
