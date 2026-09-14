@@ -148,6 +148,22 @@ def main() -> int:
         # guarantee rather than our cleanup code.
         run_case(signal.SIGKILL, "SIGKILL — nothing gets to clean up")
 
+        # The case that actually bit: the terminal is destroyed *first*, so
+        # Textual's shutdown has no screen to write to. Killing the app while
+        # its pty still exists does not reproduce it.
+        print("\npty destroyed first — the real ctrl+w case")
+        proc, app_pid, cava_pid = start_instance()
+        if app_pid:
+            check("instance running", True, f"app={app_pid}")
+            proc.kill()          # destroy the pty owner, not the app
+            check("app exits when its terminal vanishes",
+                  wait_gone(app_pid, 15), f"pid {app_pid}")
+            if cava_pid:
+                check("cava goes with it", wait_gone(cava_pid, 15),
+                      f"pid {cava_pid}")
+        else:
+            check("instance started", False, "never appeared")
+
         print("\ntemp files")
         cleanup()
         leftover = list(Path("/tmp").glob("dj-skippy-cava-*.conf"))

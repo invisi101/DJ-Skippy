@@ -352,6 +352,9 @@ class NowPlaying(Widget):
         if state.track is None:
             text.append("■ ", style="bright_black")
             text.append("Nothing playing", style="bright_black")
+            text.append("   —   select a track and press ", style="bright_black")
+            text.append("enter", style="bold cyan")
+            text.append(" to play", style="bright_black")
             text.append("\n")
             text.append("─" * width, style="bright_black")
             return text
@@ -405,8 +408,21 @@ class StatusLine(Widget):
         for view in View:
             label = f" {int(view)}:{view.name.title()} "
             text.append(label, style="reverse bold" if view is self.view else "bright_black")
+
+        # A transient message replaces the key legend; otherwise the legend is
+        # always on screen, because a player that does not tell you how to
+        # pause it is not finished.
         if self.message:
             text.append("  " + self.message, style="yellow")
+        else:
+            for key, what in (
+                ("enter", "play"), ("space", "pause"), ("v", "stop"),
+                ("b/z", "next/prev"), ("+/-", "vol"), ("?", "help"),
+                ("q", "quit"),
+            ):
+                text.append("  " + key, style="bold cyan")
+                text.append(" " + what, style="bright_black")
+
         if self.services:
             text.append("   " + self.services, style="bright_black")
         return text
@@ -655,14 +671,45 @@ class DJSkippy(App):
                 pass
 
     def _on_signal(self, sig) -> None:
-        """Shut down on a terminating signal, saving state first."""
+        """Shut down on a terminating signal.
+
+        Everything is torn down *here*, synchronously, rather than trusting
+        Textual's normal unmount path. When the signal is SIGHUP the terminal
+        has already gone, and Textual's shutdown writes to that terminal - so
+        it blocks, the app never exits, and you are left with an orphaned
+        process holding the MPRIS name and the web port until logout. Which is
+        exactly what happened.
+        """
+        import os
+        import threading
+
+        from .cava import _kill_stragglers
+
+        for step in (
+            self._save_state,
+            _kill_stragglers,
+            lambda: self.web.stop() if self.web is not None else None,
+            self.player.shutdown,
+        ):
+            try:
+                step()
+            except Exception:
+                pass
+
+        # Ask Textual to leave nicely, in case the terminal is still there.
         try:
-            self._save_state()
+            self.exit()
         except Exception:
             pass
-        # exit() unwinds through on_unmount, which stops cava, the web server
-        # and mpv properly.
-        self.exit()
+
+        # ...but do not wait forever for a screen that may not exist. State is
+        # saved and children are dead by this point, so leaving hard is safe.
+        def _force() -> None:
+            os._exit(0)
+
+        watchdog = threading.Timer(1.5, _force)
+        watchdog.daemon = True
+        watchdog.start()
 
     async def on_unmount(self) -> None:
         self._save_state()

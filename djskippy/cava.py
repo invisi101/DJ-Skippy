@@ -145,13 +145,16 @@ class CavaVisualiser:
 
         # PipeWire first since that is what this system runs; pulse is the
         # compatibility fallback and works through pipewire-pulse too.
+        last_error = ""
         for method in ("pipewire", "pulse"):
             self._config_path = self._write_config(method)
             try:
+                # Keep stderr: cava explains itself there, and throwing it
+                # away left "could not capture audio" as the only clue.
                 self._process = await asyncio.create_subprocess_exec(
                     "cava", "-p", str(self._config_path),
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                     preexec_fn=_die_with_parent,
                 )
                 _LIVE_PROCESSES.add(self._process.pid)
@@ -159,18 +162,80 @@ class CavaVisualiser:
                 self.error = str(exc)
                 continue
 
-            # Give it a moment to fail on a bad input method.
-            await asyncio.sleep(0.4)
-            if self._process.returncode is None:
+            # Wait for cava to either produce a frame or fail. Checking
+            # only that the process still exists was too weak - it can linger
+            # briefly before giving up on an input device.
+            first_frame = await self._await_first_frame(timeout=3.0)
+            if first_frame:
                 self.running = True
                 self.error = None
                 self._task = asyncio.create_task(self._read_loop())
                 return True
 
+            complaint = await self._read_stderr()
+            if complaint:
+                last_error = f"cava ({method}): {complaint}"
+            else:
+                code = self._process.returncode
+                last_error = (
+                    f"cava ({method}) exited with code {code}"
+                    if code is not None
+                    else f"cava ({method}) produced no audio data"
+                )
+            await self._terminate_process()
             self._cleanup_config()
 
-        self.error = "cava could not capture audio"
+        self.error = last_error or "cava could not capture audio"
         return False
+
+    async def _await_first_frame(self, timeout: float) -> bool:
+        """Wait for one readable frame, so we know capture really works."""
+        if self._process is None or self._process.stdout is None:
+            return False
+        try:
+            line = await asyncio.wait_for(
+                self._process.stdout.readline(), timeout=timeout
+            )
+        except (asyncio.TimeoutError, Exception):
+            return False
+        if not line:
+            return False
+        raw = line.decode("ascii", "ignore").strip().rstrip(";")
+        try:
+            values = [int(part) for part in raw.split(";") if part != ""]
+        except ValueError:
+            return False
+        if values:
+            self.levels = [min(1.0, v / MAX_RANGE) for v in values]
+            return True
+        return False
+
+    async def _read_stderr(self) -> str:
+        """Whatever cava had to say, trimmed to something displayable."""
+        if self._process is None or self._process.stderr is None:
+            return ""
+        try:
+            data = await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
+        except Exception:
+            return ""
+        text = data.decode("utf-8", "replace").strip()
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return lines[-1][:120] if lines else ""
+
+    async def _terminate_process(self) -> None:
+        if self._process is None:
+            return
+        pid = self._process.pid
+        try:
+            self._process.terminate()
+            await asyncio.wait_for(self._process.wait(), timeout=2)
+        except Exception:
+            try:
+                self._process.kill()
+            except Exception:
+                pass
+        _LIVE_PROCESSES.discard(pid)
+        self._process = None
 
     async def _read_loop(self) -> None:
         assert self._process is not None and self._process.stdout is not None
