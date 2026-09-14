@@ -103,9 +103,9 @@ class PlaylistStore:
     def load(self, name: str, library: "Library") -> list["Track"]:
         """Read a playlist back, resolving paths against the library.
 
-        Tracks that are in the file but no longer in the library are matched by
-        path directly, so a playlist still works for files beets has not
-        imported. Anything that no longer exists on disk is dropped.
+        Tracks in the file but no longer in the library are read from disk
+        directly, so a playlist still works for music outside the music
+        folder. Anything that no longer exists is dropped.
         """
         path = self._path_for(name)
         if not path.exists():
