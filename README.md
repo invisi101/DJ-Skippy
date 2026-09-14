@@ -334,6 +334,16 @@ in Review, **and every entry tells you why it is there and what to do**.
 | `⟳` | MusicBrainz did not answer | `X` to re-check and retry. **Their server, not your library** |
 | `=` | You already have this album | `Enter` to decide. It was *kept* — nothing was replaced |
 
+### Multi-disc albums
+
+A folder called `CD1` or `Disc 2` is one disc of a set, and beets matches it on
+its own against the *complete* release — so half the tracks look missing and
+the score lands around 70%. The album is usually fine; the match is not.
+
+DJ-Skippy recognises these, shows them as `Artist/CD1` rather than a bare
+`CD1`, and tells you the real fix: tag the **parent** folder so both discs
+import as one album. Press `4`, navigate to it, press `t`.
+
 Keys: `Enter` opens it, `X` retries everything, `D` dismisses an entry. The
 guidance panel follows your cursor.
 

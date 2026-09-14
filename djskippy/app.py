@@ -11,6 +11,7 @@ whatever theme the terminal is running instead of fighting it.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from enum import IntEnum
@@ -94,13 +95,60 @@ class ReviewItem:
         ],
     }
 
+    #: Folder names that identify a disc rather than an album. On their own
+    #: they say nothing useful, and they change what the right fix is.
+    DISC_PATTERN = re.compile(
+        # "CD1", "Disc 2", "CD 2 (320)", "CD 1 (L)", "Vol. 3", bare "1"
+        r"^(?:(?:cd|disc|disk|vol(?:ume)?)[\s._-]*\d+|\d+)"
+        r"\s*(?:\(.*\)|\[.*\])?$",
+        re.IGNORECASE,
+    )
+
+    @property
+    def is_disc_folder(self) -> bool:
+        return bool(self.DISC_PATTERN.match(self.path.name.strip()))
+
+    @property
+    def display_name(self) -> str:
+        """Enough of the path to know what this actually is.
+
+        "CD1" tells you nothing; "Merle Haggard/CD1" tells you everything.
+        Multi-disc sets and generically-named folders need their parent.
+        """
+        name = self.path.name
+        if self.is_disc_folder or len(name) <= 4:
+            return f"{self.path.parent.name}/{name}"
+        return name
+
     @property
     def label(self) -> str:
         icon = {"weak": "?", "nomatch": "✗", "offline": "⟳", "duplicate": "="}
-        return f"  {icon.get(self.kind, '?')}  {self.path.name}   — {self.reason}"
+        return (
+            f"  {icon.get(self.kind, '?')}  {self.display_name}"
+            f"   — {self.reason}"
+        )
 
     @property
     def guidance(self) -> list[str]:
+        if self.is_disc_folder and self.kind in ("weak", "nomatch"):
+            # The generic "different edition" advice is wrong here, and
+            # following it would import half an album as a whole one.
+            return [
+                f"This is one disc of a multi-disc set "
+                f"({self.path.parent.name}).",
+                "",
+                "beets matched this disc on its own against the *complete*",
+                "release, so roughly half the tracks appear to be missing and",
+                "the score comes out low. The album is probably fine.",
+                "",
+                "  The fix is to tag the whole set at once:",
+                "    press 4, navigate to the parent folder,",
+                f"    {self.path.parent.name}, and press t there.",
+                "",
+                "  enter   tag this single disc anyway (it will import as its",
+                "          own album, which is usually not what you want)",
+                "  d       dismiss this entry",
+            ]
         return self.GUIDANCE.get(self.kind, self.GUIDANCE["weak"])
 
 
@@ -1592,7 +1640,7 @@ class DJSkippy(App):
             current = self.review_queue[0]
 
         lines.append("")
-        lines.append(f"  ── {current.path.name} " + "─" * 30)
+        lines.append(f"  ── {current.display_name} " + "─" * 30)
         meta.extend([None, None])
         for line in current.guidance:
             lines.append(f"  {line}")

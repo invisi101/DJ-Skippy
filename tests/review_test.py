@@ -44,6 +44,24 @@ async def main() -> int:
           len({tuple(ReviewItem(Path("/t"), "r", k).guidance)
                for k in ("weak", "nomatch", "offline", "duplicate")}) == 4)
 
+    print("\nmulti-disc folders are named and explained properly")
+    disc = ReviewItem(Path("/home/neil/Music/Merle Haggard/CD1"),
+                      "best match only 70%", "weak")
+    check("recognised as a disc", disc.is_disc_folder)
+    check("shows the album, not just 'CD1'",
+          disc.display_name == "Merle Haggard/CD1", disc.display_name)
+    guide = " ".join(disc.guidance)
+    check("explains why the score is low", "complete" in guide)
+    check("points at the parent folder", "Merle Haggard" in guide)
+    check("differs from the generic advice",
+          disc.guidance != ReviewItem.GUIDANCE["weak"])
+
+    normal = ReviewItem(Path("/home/neil/Music/Jeff Buckley/Grace"),
+                        "best match only 74%", "weak")
+    check("a normal album is not treated as a disc",
+          not normal.is_disc_folder and normal.display_name == "Grace",
+          normal.display_name)
+
     print("\nMusicBrainz health probe")
     healthy, message = check_musicbrainz()
     check("probe returns a verdict and a message",
