@@ -578,6 +578,11 @@ interface over engines that are already excellent:
 | Layer | Engine |
 |---|---|
 | Decoding and playback | **mpv** via libmpv — every format, gapless, ReplayGain |
+
+Gapless is real rather than nominal: the next track is handed to mpv while the
+current one is still playing, so mpv performs the handover internally. Measured
+against raw mpv driving its own playlist, the silence at a transition is
+identical to within 10ms.
 | Library and tagging | **beets**, used as a Python library rather than a subprocess |
 | Visualisation | **cava**, read through its raw output |
 | Interface | **Textual** |
@@ -676,6 +681,8 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/review_test.py    # review guidance and retry logic
 ./.venv/bin/python tests/browser_test.py   # playing files outside the library
 ./.venv/bin/python tests/multidisc_test.py # grouping discs into albums
+./.venv/bin/python tests/playback_test.py  # advancing, skipping broken files
+./.venv/bin/python tests/transport_test.py # next/prev/queue/shuffle/repeat
 ./.venv/bin/python tests/robustness_test.py # hostile filesystems
 ./.venv/bin/python tests/equivalence_test.py # behaves as beets does
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL

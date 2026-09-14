@@ -70,6 +70,16 @@ class Player:
         self._failures = 0
         self.failed_paths: list[str] = []
 
+        #: What we have handed to mpv, mirroring its internal playlist.
+        #: Gapless playback requires mpv to already hold the next file when
+        #: the current one ends - loading it on EOF, as this used to, leaves
+        #: roughly a third of a second of silence, which is ruinous on an
+        #: album that segues.
+        self._mpv_entries: list[Track] = []
+        self._mpv_pos = 0
+        #: Our playlist index corresponding to each mpv entry.
+        self._entry_index: list[int] = []
+
         self._mpv = mpv.MPV(
             video=False,
             audio_display=False,
@@ -101,6 +111,11 @@ class Player:
                 self.state.duration = float(value)
                 self._on_change()
 
+        @self._mpv.property_observer("playlist-pos")
+        def _observe_playlist_pos(_name, value):  # pragma: no cover - callback
+            if value is not None and value >= 0:
+                self._on_mpv_moved(int(value))
+
         @self._mpv.event_callback("end-file")
         def _on_end(event):  # pragma: no cover - callback
             # reason is an *integer* from MpvEventEndFile, not a string.
@@ -112,13 +127,108 @@ class Player:
 
             if reason == mpv.MpvEventEndFile.EOF:
                 self._failures = 0
-                self._handle_track_end()
+                # If mpv had the next file queued it has already moved to it
+                # gaplessly, and the playlist-pos observer handles the change.
+                # Only step in when this was the last thing it knew about.
+                with self._lock:
+                    more_queued = len(self._mpv_entries) - self._mpv_pos > 1
+                if not more_queued:
+                    self._handle_track_end()
             elif reason == mpv.MpvEventEndFile.ERROR:
                 # Unplayable: corrupt file, unsupported codec, dead mount.
                 # Skipping is the only useful response.
                 self._note_failure()
             # ABORTED, QUIT and REDIRECT are our own doing or mpv's, and must
             # not trigger an advance.
+
+    # -- gapless handover -------------------------------------------------
+
+    def _peek_after(self, index: int) -> tuple[Track | None, int]:
+        """What would follow our playlist entry `index`, without changing
+        anything. Returns (track, its playlist index, or -1 for a queue item).
+
+        Queued tracks are not consulted here: the queue is meant to interrupt,
+        and pre-loading from it would commit to a choice the user may still
+        change. The queue is honoured at the moment of handover instead.
+        """
+        with self._lock:
+            if not self._playlist:
+                return None, -1
+            if self.state.repeat is RepeatMode.ONE:
+                return self._playlist[index], index
+            if self.state.shuffle:
+                import random
+
+                nxt = random.randrange(len(self._playlist))
+                return self._playlist[nxt], nxt
+            nxt = index + 1
+            if nxt >= len(self._playlist):
+                if self.state.repeat is RepeatMode.ALL:
+                    return self._playlist[0], 0
+                return None, -1
+            return self._playlist[nxt], nxt
+
+    def _reset_mpv_playlist(self, track: Track, index: int) -> None:
+        """Point mpv at one track, discarding whatever it had queued."""
+        try:
+            self._mpv.command("playlist-clear")
+        except Exception:
+            pass
+        self._mpv_entries = [track]
+        self._entry_index = [index]
+        self._mpv_pos = 0
+
+    def _queue_upcoming(self) -> None:
+        """Hand mpv the track after the last one it knows about.
+
+        This is what makes the handover gapless: mpv opens and buffers the
+        next file while the current one is still playing.
+        """
+        if not self.continue_playback or self._queue:
+            # With something queued, the handover is decided at the time and
+            # pre-loading would play the wrong thing.
+            return
+        with self._lock:
+            if not self._entry_index:
+                return
+            if len(self._mpv_entries) - self._mpv_pos > 1:
+                return  # already has something lined up
+            last_index = self._entry_index[-1]
+
+        upcoming, upcoming_index = self._peek_after(last_index)
+        if upcoming is None or not upcoming.exists:
+            return
+        try:
+            self._mpv.command("loadfile", upcoming.path, "append")
+        except Exception:
+            return
+        with self._lock:
+            self._mpv_entries.append(upcoming)
+            self._entry_index.append(upcoming_index)
+
+    def _on_mpv_moved(self, pos: int) -> None:
+        """mpv advanced to the next file on its own - catch our state up."""
+        with self._lock:
+            if pos is None or not (0 <= pos < len(self._mpv_entries)):
+                return
+            if pos == self._mpv_pos:
+                return
+            self._mpv_pos = pos
+            track = self._mpv_entries[pos]
+            index = self._entry_index[pos]
+            if self._index >= 0 and self._index != index:
+                self._history.append(self._index)
+            self._index = index
+
+        self.state.track = track
+        self.state.playing = True
+        self.state.paused = False
+        self.state.position = 0.0
+        self.state.duration = track.length
+        self._failures = 0
+        self._apply_replaygain(self.state.replaygain)
+        self._on_change()
+        self._queue_upcoming()
 
     def _note_failure(self) -> None:
         """A track could not be played. Skip on, unless everything is failing."""
@@ -227,12 +337,22 @@ class Player:
         self.state.paused = False
         self.state.position = 0.0
         self.state.duration = track.length
+
+        with self._lock:
+            index = self._index if (
+                0 <= self._index < len(self._playlist)
+                and self._playlist[self._index].path == track.path
+            ) else -1
+        self._reset_mpv_playlist(track, index)
+
         try:
             self._mpv.play(track.path)
             self._mpv.pause = False
         except Exception:
             self.state.playing = False
         self._on_change()
+        if index >= 0:
+            self._queue_upcoming()
 
     def play_index(self, index: int) -> None:
         with self._lock:
