@@ -106,15 +106,17 @@ async def main() -> int:
               app.review_queue[-1].kind == "duplicate",
               app.review_queue[-1].reason)
 
-        # With retries disabled, an empty lookup is taken at face value.
-        # (With them enabled it retries first - covered below.)
+        # When MusicBrainz is answering, an empty result means the album
+        # genuinely is not there - believe it rather than retrying.
         app._consecutive_no_candidates = 0
-        app.cfg.watcher.lookup_retries = 0
+        app._health_checked_at = __import__("time").time()
+        app._health_verdict = True
         app._auto_answer(request(None, tag="gap"))
-        check("exhausted no-match recorded as nomatch",
+        check("a believed no-match is recorded as nomatch",
               app.review_queue[-1].kind == "nomatch",
               app.review_queue[-1].reason)
-        app.cfg.watcher.lookup_retries = 4
+        check("and it was not retried", answers[-1] == "skip",
+              str(answers[-1]))
 
         print("\nempty lookups are retried before being given up on")
         app.review_queue.clear()
@@ -122,6 +124,9 @@ async def main() -> int:
         app._retry_counts.clear()
         app._consecutive_no_candidates = 0
         app.cfg.watcher.lookup_retries = 2
+        # Retrying only makes sense when the server is the problem.
+        app._health_checked_at = __import__("time").time()
+        app._health_verdict = False
         # Keep the test quick - the real delays are 3s, 6s, 12s, 24s.
         import djskippy.app as appmod
         real_sleep, appmod.time.sleep = appmod.time.sleep, lambda _s: None
@@ -140,7 +145,8 @@ async def main() -> int:
               f"{len(app.review_queue)} queued")
 
         appmod.time.sleep = real_sleep
-        app.cfg.watcher.lookup_retries = 4
+        app.cfg.watcher.lookup_retries = 2
+        app._health_verdict = True
         app.review_queue.clear()
         app._auto_answer(request(72.0, tag="weak2"))
 

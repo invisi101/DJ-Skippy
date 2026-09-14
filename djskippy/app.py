@@ -620,6 +620,8 @@ class DJSkippy(App):
         self._consecutive_no_candidates = 0
         self._mb_offline = False
         self._retry_counts: dict[str, int] = {}
+        self._health_checked_at = 0.0
+        self._health_verdict = True
         self._picking_playlist = False
         self._browser_dir = self.cfg.library.music_dir
         self.beets_cmd = BeetsCommand(on_done=self._on_beets_done)
@@ -2089,11 +2091,17 @@ class DJSkippy(App):
             )
             return True
 
-        # No candidates at all. Before concluding anything, retry: under load
-        # MusicBrainz returns 503, which beets surfaces as "no match found",
-        # and the same album usually resolves on a later attempt. Giving up on
-        # the first empty answer is how a whole library ends up in Review.
+        # No candidates at all. That is either a genuine gap in MusicBrainz or
+        # their server refusing to answer, and only one of those is worth
+        # retrying. Ask the server directly rather than burning several
+        # minutes of backoff on a compilation that simply is not in the
+        # database - which is what a large Various Artists album usually is.
         tries = self._retry_counts.get(request.path, 0)
+        if tries == 0 and self._musicbrainz_is_healthy():
+            self.tagger.respond("skip")
+            self._defer_for_review(request.path, "no MusicBrainz match", "nomatch")
+            return True
+
         if tries < self.cfg.watcher.lookup_retries:
             self._retry_counts[request.path] = tries + 1
             # beets has already retried this lookup 6 times internally, so
@@ -2126,6 +2134,23 @@ class DJSkippy(App):
         else:
             self._defer_for_review(request.path, "no MusicBrainz match", "nomatch")
         return True
+
+    #: How long a health verdict is trusted before probing again. Long
+    #: enough that a bulk import does not probe once per album, short enough
+    #: that an outage starting mid-run is noticed.
+    HEALTH_CACHE_SECONDS = 120.0
+
+    def _musicbrainz_is_healthy(self) -> bool:
+        """Is MusicBrainz answering? Cached, because this is asked per album."""
+        now = time.time()
+        cached = getattr(self, "_health_checked_at", 0.0)
+        if now - cached < self.HEALTH_CACHE_SECONDS:
+            return getattr(self, "_health_verdict", True)
+
+        healthy, _ = check_musicbrainz(samples=2)
+        self._health_checked_at = now
+        self._health_verdict = healthy
+        return healthy
 
     def _suspect_musicbrainz_down(self) -> None:
         """Three no-answers in a row: check, and stop the run if it is them."""

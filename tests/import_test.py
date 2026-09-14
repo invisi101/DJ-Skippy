@@ -97,19 +97,28 @@ async def main() -> int:
         check("duplicates are kept, never replaced", answers[-1] == "keep",
               str(answers[-1]))
 
-        none = TaggerRequest(path="/home/neil/Music/Test/None",
-                             item_count=3, candidates=[])
-        app._auto_answer(none)
-        check("empty lookup retries rather than giving up",
-              answers[-1] == "rescan", str(answers[-1]))
+        import time as _t
+        # With MusicBrainz answering, an empty result is taken at face value -
+        # retrying a compilation that simply is not in the database wastes
+        # minutes of backoff per album.
+        app._health_checked_at = _t.time()
+        app._health_verdict = True
+        app._auto_answer(TaggerRequest(path="/home/neil/Music/Test/None",
+                                       item_count=3, candidates=[]))
+        check("a believed no-match is skipped, not guessed",
+              answers[-1] == "skip", str(answers[-1]))
 
-        # Exhaust the retries: it must then skip, never guess.
-        app.cfg.watcher.lookup_retries = 0
+        # When the server is failing, the same result is worth retrying.
+        app._health_verdict = False
+        app._retry_counts.clear()
+        import djskippy.app as _m
+        _real, _m.time.sleep = _m.time.sleep, lambda _s: None
         app._auto_answer(TaggerRequest(path="/home/neil/Music/Test/None2",
                                        item_count=3, candidates=[]))
-        check("no-match is skipped not guessed", answers[-1] == "skip",
+        check("an outage is retried instead", answers[-1] == "rescan",
               str(answers[-1]))
-        app.cfg.watcher.lookup_retries = 4
+        _m.time.sleep = _real
+        app._health_verdict = True
 
         print("\nimport view")
         await pilot.press("6")

@@ -376,8 +376,14 @@ your whole library under "needs review" on a bad afternoon.
 
 DJ-Skippy handles it in three layers:
 
-1. **Retries every empty lookup** — 4 times by default, backing off 3s, 6s,
-   12s, 24s. Albums that appear missing usually resolve on a later attempt.
+1. **Retries empty lookups — but only when the server is at fault.** An
+   empty result means either "not in the database" or "we did not answer",
+   and those want opposite responses. MusicBrainz is asked directly (cached
+   for two minutes) before deciding: if it is answering, the album genuinely
+   is not there and is filed for review immediately; if it is not, the lookup
+   is retried with backoff. Without that distinction, a large Various Artists
+   compilation that simply is not in MusicBrainz burns minutes of retries per
+   album.
 2. **Checks before starting** a bulk import, and refuses to begin if
    MusicBrainz is down, rather than burning through your library for nothing.
 3. **Stops mid-run** if three albums in a row come back empty and a health
