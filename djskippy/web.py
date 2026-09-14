@@ -124,7 +124,7 @@ async function ctl(action) {
 async function refresh() {
   try {
     const s = await (await fetch('api/state')).json();
-    $('backend').textContent = s.track_count + ' tracks \\u00b7 ' + s.backend;
+    $('backend').textContent = s.track_count + ' tracks';
     $('title').textContent = s.title || 'Nothing playing';
     $('meta').textContent = s.artist ? s.artist + ' \\u2014 ' + s.album : '\\u00a0';
     $('pos').textContent = fmt(s.position);
@@ -229,7 +229,6 @@ class WebServer:
                 volume=s.volume,
                 shuffle=s.shuffle,
                 repeat=s.repeat.value,
-                backend=library.backend,
                 track_count=library.track_count,
             )
 

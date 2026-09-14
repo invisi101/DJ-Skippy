@@ -89,7 +89,7 @@ async def main() -> int:
 
         print("\nvia the application")
         cfg.web.enabled = cfg.mpris.enabled = False
-        cfg.visualiser.enabled = cfg.watcher.enabled = False
+        cfg.visualiser.enabled = False
         cfg.playback.resume = False
         from djskippy.app import DJSkippy, View
 

@@ -39,21 +39,10 @@ async def main() -> int:
     app = DJSkippy(cfg)
 
     print("\nlibrary")
-    check("backend resolved", app.library.backend in ("beets", "filesystem"),
-          app.library.backend)
     check("tracks found", app.library.track_count > 0,
           f"{app.library.track_count} tracks")
 
     async with app.run_test(size=(160, 45)) as pilot:
-        # The disk scan finishes a second or so after startup and adds
-        # everything beets has not tagged. Let it settle first: index
-        # arithmetic below is meaningless while the list is still growing.
-        settled = app.library.track_count
-        for _ in range(40):
-            await asyncio.sleep(0.25)
-            if app.library.track_count == settled and app.library.untagged_count:
-                break
-            settled = app.library.track_count
 
         print("\nboot")
         check("artists pane populated", len(app._panes[0].items) > 0,
@@ -91,8 +80,7 @@ async def main() -> int:
 
         print("\nviews")
         for key, view in (("2", View.PLAYLIST), ("3", View.QUEUE),
-                          ("4", View.BROWSER), ("5", View.REVIEW),
-                          ("6", View.IMPORT), ("7", View.HELP),
+                          ("4", View.BROWSER), ("5", View.HELP),
                           ("1", View.LIBRARY)):
             await pilot.press(key)
             check(f"view {key} = {view.name}", app.view is view)
@@ -143,20 +131,6 @@ async def main() -> int:
         await pilot.press("enter")
         check("command applied", app.player.state.volume == 70,
               str(app.player.state.volume))
-
-        print("\nalbum art")
-        tracks = app.library.all_tracks
-        with_art = [t for t in tracks[:80] if __import__(
-            "djskippy.art", fromlist=["has_art"]).has_art(t.path)]
-        check("art found for some tracks", len(with_art) > 0,
-              f"{len(with_art)}/80 sampled")
-        if with_art:
-            from djskippy import art as art_mod
-            rows = art_mod.render_segments(with_art[0].path, 24, 12)
-            check("half-block renderer produces rows", len(rows) == 12,
-                  f"{len(rows)} rows")
-            check("graphics backend", art_mod.best_renderer() == "graphics",
-                  art_mod.best_renderer())
 
     print()
     if FAILURES:

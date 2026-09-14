@@ -65,6 +65,7 @@ class Player:
         self._history: list[int] = []
         self._lock = threading.RLock()
         self._advancing = False
+        self._advance_again = False
         #: Consecutive unplayable tracks, so a playlist of broken files does
         #: not spin through itself at full speed.
         self._failures = 0
@@ -353,10 +354,34 @@ class Player:
 
     def remove_from_playlist(self, index: int) -> None:
         with self._lock:
-            if 0 <= index < len(self._playlist):
-                self._playlist.pop(index)
-                if index < self._index:
-                    self._index -= 1
+            if not (0 <= index < len(self._playlist)):
+                return
+            self._playlist.pop(index)
+            if index < self._index:
+                self._index -= 1
+            elif index == self._index:
+                # The current track is gone; _index now points at whatever
+                # took its place, which is the right thing to play next.
+                self._index = min(self._index, len(self._playlist) - 1)
+
+            # History and the mpv mapping are both lists of playlist indices,
+            # and both go stale when one is removed. Left unfixed, "previous"
+            # jumps to the wrong track and the prefetched gapless entry maps
+            # to something other than what is highlighted.
+            self._history = [
+                h - 1 if h > index else h
+                for h in self._history
+                if h != index
+            ]
+            self._entry_index = [
+                e - 1 if e > index else e for e in self._entry_index
+            ]
+            if index in self._entry_index or any(
+                e >= len(self._playlist) for e in self._entry_index
+            ):
+                # What mpv has queued no longer means what we thought.
+                self._entry_index = self._entry_index[: self._mpv_pos + 1]
+                self._mpv_entries = self._mpv_entries[: self._mpv_pos + 1]
         self._on_change()
 
     # -- transport -------------------------------------------------------
@@ -435,13 +460,20 @@ class Player:
 
     def next(self) -> None:
         """Queue first, then the playlist."""
+        queued: Track | None = None
         with self._lock:
             if self._queue:
-                track = self._queue.pop(0)
-                self._apply_replaygain(self.state.replaygain)
-                self.play_track(track)
-                return
+                queued = self._queue.pop(0)
 
+        if queued is not None:
+            # Outside the lock: play_track notifies the UI, which blocks until
+            # the UI thread services it. Holding the lock across that deadlocks
+            # against any key handler that takes the same lock.
+            self._apply_replaygain(self.state.replaygain)
+            self.play_track(queued)
+            return
+
+        with self._lock:
             if not self._playlist:
                 return
 
@@ -486,14 +518,23 @@ class Player:
             self.play_track(track)
 
     def _handle_track_end(self) -> None:
+        # The guard exists to stop one end-of-track producing two advances.
+        # It must not also swallow the *next* advance: a missing file inside
+        # play_track calls straight back here, and returning early left
+        # playback stopped dead on it - the opposite of the intent.
         if self._advancing:
+            self._advance_again = True
             return
         self._advancing = True
         try:
-            if self.continue_playback:
-                self.next()
-            else:
-                self.stop()
+            while True:
+                self._advance_again = False
+                if self.continue_playback:
+                    self.next()
+                else:
+                    self.stop()
+                if not self._advance_again:
+                    break
         finally:
             self._advancing = False
 

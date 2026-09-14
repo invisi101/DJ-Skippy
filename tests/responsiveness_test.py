@@ -35,11 +35,10 @@ def check(label: str, condition: bool, detail: str = "") -> None:
 
 async def main() -> int:
     from djskippy.app import DJSkippy, View
-    from djskippy.tagger import Candidate, TaggerRequest
 
     cfg = Config.load()
     cfg.web.enabled = cfg.mpris.enabled = False
-    cfg.visualiser.enabled = cfg.watcher.enabled = False
+    cfg.visualiser.enabled = False
     cfg.playback.resume = False
     cfg.playback.volume = 8
 
@@ -78,23 +77,6 @@ async def main() -> int:
         await pilot.press("1", "j", "j", "l", "j")
         where = (app.view, app.focus_column,
                  app._panes[0].selected, app._panes[1].selected)
-
-        # A decision arriving from the watcher or a bulk run.
-        app._auto_tagging = True
-        app._show_tag_request(TaggerRequest(
-            path="/home/neil/Music/Somewhere/An Album",
-            item_count=10,
-            candidates=[Candidate(album="A", artist="B", distance=0.3,
-                                  url="", info_line="")],
-        ))
-        now = (app.view, app.focus_column,
-               app._panes[0].selected, app._panes[1].selected)
-        check("an unrequested tagging decision does not switch view",
-              now == where, f"{where[0].name} -> {now[0].name}")
-        check("but it does tell you", "press 6" in app._status.message,
-              app._status.message)
-        app._tag_request = None
-        app._auto_tagging = False
 
         # MusicBrainz going down mid-run.
         app._mb_offline = False

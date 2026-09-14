@@ -1,24 +1,31 @@
-"""Music library.
+"""Music library: whatever is in your music folder.
 
-Reads the beets database when one exists - that is where the MusicBrainz tags
-live - and falls back to scanning the music folder with mutagen when it does
-not, so DJ-Skippy is useful before anything has been imported.
+One source of truth — the filesystem. Tags are read from the files with
+mutagen, and where a file has none worth having the folder layout is used
+instead: Artist/Album/track is the near-universal convention, and reading it
+gives a browsable library from files that carry nothing at all.
 
-A note on beets paths, learned the hard way: beets 2.x stores item paths
-*relative* to the library directory and expands them via a ContextVar. That
-ContextVar is per-thread, so any thread that did not construct the Library
-reads it back empty and gets relative paths. Every access here goes through
-`_bound()`, which rebinds it. Forget that and you get paths resolved against
-whatever the working directory happens to be.
+No database, no external service, nothing to import. Put music in the folder
+and it is in the library.
 """
 
 from __future__ import annotations
 
+import json
 import os
-from contextlib import contextmanager
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Sequence
+
+#: Where the tag cache lives. Walking the folder takes hundredths of a second;
+#: reading tags out of a few thousand files takes seconds. Caching the tags
+#: against each file's size and mtime makes startup instant, and a file that
+#: changes is re-read automatically.
+CACHE_FILE = Path(
+    os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")
+) / "dj-skippy" / "library-cache.json"
+CACHE_VERSION = 1
 
 AUDIO_SUFFIXES = {
     ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".wv",
@@ -27,16 +34,24 @@ AUDIO_SUFFIXES = {
     ".s3m", ".it", ".spx", ".mp4",
 }
 
+#: Folder names denoting a disc within a release rather than a release:
+#: "CD1", "Disc 2", "CD 2 (320)", "CD2 - Live In Madrid", "Vol. 3". A bare
+#: number counts only at one or two digits — "1999" is an album.
+DISC_PATTERN = re.compile(
+    r"^(?:(?:cd|disc|disk|vol(?:ume)?)[\s._-]*\d+|\d{1,2})"
+    r"\s*(?:\(.*\)|\[.*\]|[-–—:]\s*.+)?$",
+    re.IGNORECASE,
+)
+
+
+def is_disc_folder(path: Path | str) -> bool:
+    """Is this folder one disc of a set, rather than an album in itself?"""
+    return bool(DISC_PATTERN.match(Path(path).name.strip()))
+
 
 @dataclass(frozen=True)
 class Track:
-    """One playable item.
-
-    `tagged` records whether this came from beets - that is, whether it
-    carries MusicBrainz metadata - or was read straight from the file. The
-    distinction is shown in the interface rather than hidden: music plays
-    either way, and knowing which is which is the user's business.
-    """
+    """One playable file."""
 
     id: int
     path: str
@@ -50,7 +65,6 @@ class Track:
     year: int
     genre: str
     format: str
-    tagged: bool = False
 
     @property
     def display_title(self) -> str:
@@ -75,7 +89,7 @@ class Track:
 
 def sort_key(name: str, smart: bool = True) -> str:
     """Sort key for artist names. With `smart`, ignore a leading article so
-    "The Pogues" files under P - cmus's smart_artist_sort."""
+    "The Pogues" files under P."""
     key = name.strip().lower()
     if smart:
         for article in ("the ", "a ", "an "):
@@ -86,181 +100,118 @@ def sort_key(name: str, smart: bool = True) -> str:
 
 
 class Library:
-    """Artist -> album -> track view over whichever backend is available."""
+    """Artist -> album -> track, read from the music folder."""
 
-    def __init__(self, music_dir: Path, smart_sort: bool = True,
-                 scan_disk: bool = True, use_beets: bool = True) -> None:
+    def __init__(self, music_dir: Path, smart_sort: bool = True) -> None:
         self.music_dir = Path(music_dir)
         self.smart_sort = smart_sort
-        #: When False, the beets database is ignored entirely and everything
-        #: comes from the files. DJ-Skippy is a player first; MusicBrainz is
-        #: an enhancement you can decline.
-        self.use_beets = use_beets
         self._tracks: list[Track] = []
-        self._beets_lib = None
-        self.backend = "empty"
+        self._cache: dict = {}
+        self._cache_hits = 0
         self.error: str | None = None
-        #: How much of the library carries MusicBrainz metadata.
-        self.tagged_count = 0
-        self.untagged_count = 0
-        self.load(scan_disk=scan_disk)
+        self.load()
 
     # -- loading ---------------------------------------------------------
 
-    def load(self, scan_disk: bool = True) -> None:
-        """(Re)load the library.
-
-        Everything on disk is included, whether or not beets knows about it.
-        MusicBrainz data is layered over the files that have it rather than
-        replacing the rest - the previous behaviour meant an unimported track
-        was simply invisible, which is the wrong way round for a music player:
-        the music you own is the library, and tagging is an enhancement.
-        """
-        tagged = {t.path: t for t in self._load_from_beets()}
-
-        untagged: list[Track] = []
-        if scan_disk:
-            untagged = [
-                t for t in self._load_from_filesystem() if t.path not in tagged
-            ]
-
-        self._tracks = list(tagged.values()) + untagged
-        self.tagged_count = len(tagged)
-        self.untagged_count = len(untagged)
-
-        if tagged and untagged:
-            self.backend = "beets + disk"
-        elif tagged:
-            self.backend = "beets"
-        elif untagged:
-            self.backend = "disk"
-        else:
-            self.backend = "empty"
+    def load(self, use_cache: bool = True) -> None:
+        """(Re)scan the music folder."""
+        self._cache = self._read_cache() if use_cache else {}
+        self._cache_hits = 0
+        self._tracks = self._scan()
         self._index()
+        self._write_cache()
 
-    def merge_from_disk(self) -> int:
-        """Add anything on disk that is not already known. Returns how many.
+    # -- tag cache -------------------------------------------------------
 
-        Split out so the interface can show the tagged library immediately -
-        which loads in a fraction of a second - and fill in the rest without
-        making the user wait for it.
-        """
-        known = {t.path for t in self._tracks}
-        found = [t for t in self._load_from_filesystem() if t.path not in known]
-        if not found:
-            return 0
-        self._tracks.extend(found)
-        self.untagged_count += len(found)
-        self.backend = "beets + disk" if self.tagged_count else "disk"
-        self._index()
-        return len(found)
-
-    @contextmanager
-    def _bound(self) -> Iterator[None]:
-        """Bind the beets music-dir ContextVar for the current thread.
-
-        See the module docstring - without this, item paths come back relative
-        and nothing plays.
-        """
+    @staticmethod
+    def _stamp(path: Path) -> str:
+        """Cheap identity for a file: size and mtime."""
         try:
-            from beets import context
+            st = path.stat()
+            return f"{st.st_size}:{int(st.st_mtime)}"
+        except OSError:
+            return ""
 
-            if self._beets_lib is not None:
-                context.set_music_dir(self._beets_lib.directory)
+    def _read_cache(self) -> dict:
+        try:
+            data = json.loads(CACHE_FILE.read_text())
+        except (OSError, ValueError):
+            return {}
+        if data.get("version") != CACHE_VERSION:
+            return {}
+        if data.get("music_dir") != str(self.music_dir):
+            return {}
+        entries = data.get("tracks")
+        return entries if isinstance(entries, dict) else {}
+
+    def _write_cache(self) -> None:
+        """Never raises: a cache that cannot be written is not a failure."""
+        try:
+            CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": CACHE_VERSION,
+                "music_dir": str(self.music_dir),
+                "tracks": {
+                    t.path: {
+                        "stamp": self._stamp(Path(t.path)),
+                        "title": t.title, "artist": t.artist,
+                        "albumartist": t.albumartist, "album": t.album,
+                        "track_no": t.track_no, "disc_no": t.disc_no,
+                        "length": t.length, "year": t.year,
+                        "genre": t.genre, "format": t.format,
+                    }
+                    for t in self._tracks
+                },
+            }
+            tmp = CACHE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(CACHE_FILE)
         except Exception:
             pass
-        yield
 
-    def _load_from_beets(self) -> list[Track]:
-        if not self.use_beets:
-            return []
-        try:
-            from beets import config as beets_config
-            from beets.library import Library as BeetsLibrary
-
-            beets_config.read()
-            db_path = beets_config["library"].as_filename()
-            if not os.path.exists(db_path):
-                return []
-
-            directory = beets_config["directory"].as_filename()
-
-            # The beets database describes *its* directory and nothing else.
-            # Using it for any other folder means --music-dir is silently
-            # ignored and pointing DJ-Skippy at a USB drive shows the wrong
-            # library entirely.
-            try:
-                same = os.path.samefile(directory, self.music_dir)
-            except OSError:
-                same = os.path.normpath(directory) == os.path.normpath(
-                    str(self.music_dir)
-                )
-            if not same:
-                self.error = (
-                    f"beets manages {directory}, not {self.music_dir} — "
-                    "scanning the folder directly"
-                )
-                return []
-
-            self._beets_lib = BeetsLibrary(db_path, directory)
-
-            tracks: list[Track] = []
-            with self._bound():
-                for item in self._beets_lib.items():
-                    path = os.fsdecode(item.path)
-                    if not os.path.isabs(path):
-                        # Belt and braces: expand manually if the ContextVar
-                        # did not take for any reason.
-                        path = os.path.join(directory, path)
-
-                    # item.get() rather than attribute access throughout:
-                    # beets 2.14 turned `genre` into a multi-value field, and
-                    # item.genre now raises AttributeError on items that have
-                    # none. Attribute access makes every field a landmine on a
-                    # version bump; .get() with a default does not.
-                    artist = _text(item, "artist") or "Unknown Artist"
-                    tracks.append(
-                        Track(
-                            id=int(item.id),
-                            path=path,
-                            title=_text(item, "title") or Path(path).stem,
-                            artist=artist,
-                            albumartist=_text(item, "albumartist") or artist,
-                            album=_text(item, "album") or "Unknown Album",
-                            track_no=_number(item, "track"),
-                            disc_no=_number(item, "disc"),
-                            length=float(item.get("length", 0.0) or 0.0),
-                            year=_number(item, "year"),
-                            genre=_text(item, "genre") or _text(item, "genres"),
-                            format=(
-                                _text(item, "format") or Path(path).suffix.lstrip(".")
-                            ).upper(),
-                            tagged=True,
-                        )
-                    )
-            return tracks
-        except Exception as exc:
-            self.error = f"beets backend unavailable: {type(exc).__name__}: {exc}"
-            self._beets_lib = None
+    def _scan(self) -> list[Track]:
+        if not self.music_dir.is_dir():
             return []
 
-    def _load_from_filesystem(self) -> list[Track]:
-        """Fallback scan. Slower and dumber, but means DJ-Skippy works on a
-        folder of untagged files."""
-        if not self.music_dir.exists():
-            return []
         try:
             import mutagen
         except ImportError:
             mutagen = None  # type: ignore[assignment]
 
+        try:
+            paths = sorted(self.music_dir.rglob("*"))
+        except OSError as exc:
+            self.error = str(exc)
+            return []
+
         tracks: list[Track] = []
         next_id = 1
-        for path in sorted(self.music_dir.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in AUDIO_SUFFIXES:
+        for path in paths:
+            try:
+                if not path.is_file() or path.suffix.lower() not in AUDIO_SUFFIXES:
+                    continue
+            except OSError:
                 continue
 
-            title, artist, album = path.stem, "Unknown Artist", "Unknown Album"
+            # Cached, if the file has not changed since we read it.
+            cached = self._cache.get(str(path))
+            if cached and cached.get("stamp") == self._stamp(path):
+                self._cache_hits += 1
+                tracks.append(
+                    Track(
+                        id=next_id, path=str(path),
+                        title=cached["title"], artist=cached["artist"],
+                        albumartist=cached["albumartist"],
+                        album=cached["album"],
+                        track_no=cached["track_no"], disc_no=cached["disc_no"],
+                        length=cached["length"], year=cached["year"],
+                        genre=cached["genre"], format=cached["format"],
+                    )
+                )
+                next_id += 1
+                continue
+
+            title, artist, album = path.stem, "", ""
             albumartist, genre = "", ""
             track_no = disc_no = year = 0
             length = 0.0
@@ -274,8 +225,8 @@ class Library:
                             return str(value[0]) if value else default
 
                         title = first("title", path.stem)
-                        artist = first("artist", "Unknown Artist")
-                        album = first("album", "Unknown Album")
+                        artist = first("artist")
+                        album = first("album")
                         albumartist = first("albumartist", artist)
                         genre = first("genre")
                         track_no = _first_int(first("tracknumber"))
@@ -286,22 +237,18 @@ class Library:
                 except Exception:
                     pass
 
-            # Untagged files are common outside a managed library - a USB
-            # stick, a download. Artist/Album/Track is the near-universal
-            # layout, so read the structure rather than filing everything
-            # under "Unknown Artist" and making the browser useless.
-            if artist == "Unknown Artist" or album == "Unknown Album":
-                inferred_artist, inferred_album = self._infer_from_path(path)
-                if artist == "Unknown Artist" and inferred_artist:
-                    artist = inferred_artist
-                if album == "Unknown Album" and inferred_album:
-                    album = inferred_album
+            # The folder layout is usually more accurate than a file with half
+            # its tags missing.
+            if not artist or not album:
+                folder_artist, folder_album = self._infer_from_path(path)
+                artist = artist or folder_artist or "Unknown Artist"
+                album = album or folder_album or "Unknown Album"
 
             tracks.append(
                 Track(
                     id=next_id,
                     path=str(path),
-                    title=title,
+                    title=title or path.stem,
                     artist=artist,
                     albumartist=albumartist or artist,
                     album=album,
@@ -319,7 +266,7 @@ class Library:
     def _infer_from_path(self, path: Path) -> tuple[str, str]:
         """Guess (artist, album) from where a file sits.
 
-        Expects .../Artist/Album/track. A disc folder is stepped over, so
+        Expects .../Artist/Album/track. Disc folders are stepped over, so
         .../Artist/Album/CD1/track still reports the album rather than "CD1".
         """
         try:
@@ -327,15 +274,11 @@ class Library:
         except ValueError:
             return "", ""
 
-        parts = list(relative.parts[:-1])  # drop the filename
+        parts = list(relative.parts[:-1])
         if not parts:
             return "", ""
-
-        from .maintenance import is_disc_folder
-
-        while len(parts) > 1 and is_disc_folder(Path(parts[-1])):
+        while len(parts) > 1 and is_disc_folder(parts[-1]):
             parts.pop()
-
         if len(parts) >= 2:
             return parts[-2], parts[-1]
         return "", parts[-1]
@@ -346,7 +289,6 @@ class Library:
         self._by_artist: dict[str, list[Track]] = {}
         for track in self._tracks:
             self._by_artist.setdefault(track.albumartist, []).append(track)
-
         self._artists = sorted(
             self._by_artist, key=lambda a: sort_key(a, self.smart_sort)
         )
@@ -364,21 +306,10 @@ class Library:
     def artists(self) -> list[str]:
         return self._artists
 
-    def tagged_state(self, artist: str) -> str:
-        """"all", "none" or "some" of this artist carries MusicBrainz data."""
-        tracks = self._by_artist.get(artist, [])
-        if not tracks:
-            return "none"
-        tagged = sum(1 for t in tracks if t.tagged)
-        if tagged == len(tracks):
-            return "all"
-        return "none" if tagged == 0 else "some"
-
     def albums(self, artist: str) -> list[str]:
-        """Albums by an artist, oldest first - the order a listener thinks in."""
-        tracks = self._by_artist.get(artist, [])
+        """Albums by an artist, oldest first — the order a listener thinks in."""
         seen: dict[str, int] = {}
-        for track in tracks:
+        for track in self._by_artist.get(artist, []):
             seen.setdefault(track.album, track.year or 0)
         return sorted(seen, key=lambda album: (seen[album], album.lower()))
 
@@ -408,7 +339,7 @@ class Library:
         ]
 
     def filter(self, field: str, value: str) -> list[Track]:
-        """cmus-style field filter, e.g. filter("genre", "Celtic Folk")."""
+        """Field filter, e.g. filter("genre", "Celtic Folk")."""
         needle = value.strip().lower()
         return [
             t for t in self._tracks
@@ -420,26 +351,6 @@ class Library:
             if track.id == track_id:
                 return track
         return None
-
-
-def _text(item: Any, field: str) -> str:
-    """Read a possibly-absent, possibly-multi-valued beets field as a string."""
-    try:
-        value = item.get(field, "")
-    except Exception:
-        return ""
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple, set)):
-        return ", ".join(str(v) for v in value if v)
-    return str(value)
-
-
-def _number(item: Any, field: str) -> int:
-    try:
-        return int(item.get(field, 0) or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _first_int(value: str) -> int:

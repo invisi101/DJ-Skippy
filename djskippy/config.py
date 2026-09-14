@@ -37,18 +37,7 @@ DEFAULT_CONFIG = """\
 # lines, and anything else TOML allows. Delete it and it regenerates.
 
 [library]
-# MusicBrainz enrichment. DJ-Skippy is a music player first: with this off it
-# plays everything in your folder using the tags already in the files, and
-# never contacts MusicBrainz, imports anything, or maintains a beets database.
-#
-# With it on, albums can additionally be looked up and tagged properly, and
-# the interface marks which tracks carry MusicBrainz data (no mark) and which
-# were read from the files themselves (·).
-musicbrainz = true
-
-# Where your music lives. DJ-Skippy reads the beets database when one exists
-# (that is where the MusicBrainz tags are) and falls back to scanning this
-# folder directly when it does not.
+# Where your music lives. Everything under it is your library.
 music_dir = "~/Music"
 
 # Sort "The Pogues" under P rather than T.
@@ -96,29 +85,6 @@ port = 8080
 # DJ-Skippy with no further setup.
 enabled = true
 
-[watcher]
-# Watch the music folder and import new albums automatically.
-enabled = true
-
-# How long a folder must go without changes before it is treated as a finished
-# copy. Albums arrive one file at a time; importing a half-copied folder gives
-# you a half-tagged album. Raise this if you copy over a slow network.
-settle_seconds = 20
-
-# Similarity at or above which an album is tagged with no questions asked.
-# Below it, the album is parked in the review queue (view 6) for you to decide.
-# 90 is about right: above that, differences are cosmetic capitalisation;
-# below, they tend to be genuinely different releases.
-auto_threshold = 90
-
-# MusicBrainz returns 503 under load, which looks exactly like "album not
-# found". Before believing that, re-run the whole lookup this many times.
-#
-# Note beets already retries each HTTP request 6 times internally with
-# backoff, and rate-limits itself to one request every 4 seconds. These are
-# *additional* full lookups on top of that, so 2 means up to 18 attempts per
-# album. Raising it makes a bad MusicBrainz day survivable but very slow.
-lookup_retries = 2
 """
 
 
@@ -166,7 +132,6 @@ def _as_choice(value: Any, allowed: tuple[str, ...], default: str) -> str:
 class LibraryConfig:
     music_dir: Path = Path.home() / "Music"
     smart_artist_sort: bool = True
-    musicbrainz: bool = True
 
 
 @dataclass
@@ -198,21 +163,12 @@ class MprisConfig:
 
 
 @dataclass
-class WatcherConfig:
-    enabled: bool = True
-    settle_seconds: float = 20.0
-    auto_threshold: float = 90.0
-    lookup_retries: int = 2
-
-
-@dataclass
 class Config:
     library: LibraryConfig = field(default_factory=LibraryConfig)
     playback: PlaybackConfig = field(default_factory=PlaybackConfig)
     visualiser: VisualiserConfig = field(default_factory=VisualiserConfig)
     web: WebConfig = field(default_factory=WebConfig)
     mpris: MprisConfig = field(default_factory=MprisConfig)
-    watcher: WatcherConfig = field(default_factory=WatcherConfig)
 
     @classmethod
     def load(cls) -> Config:
@@ -243,7 +199,6 @@ class Config:
         cfg.library = LibraryConfig(
             music_dir=music_dir,
             smart_artist_sort=_as_bool(lib.get("smart_artist_sort"), True),
-            musicbrainz=_as_bool(lib.get("musicbrainz"), True),
         )
 
         pb = data.get("playback", {})
@@ -280,15 +235,6 @@ class Config:
             enabled=_as_bool(data.get("mpris", {}).get("enabled"), True)
         )
 
-        watch = data.get("watcher", {})
-        cfg.watcher = WatcherConfig(
-            enabled=_as_bool(watch.get("enabled"), True),
-            settle_seconds=max(1.0, _as_float(watch.get("settle_seconds"), 20)),
-            auto_threshold=max(
-                0.0, min(101.0, _as_float(watch.get("auto_threshold"), 90))
-            ),
-            lookup_retries=max(0, min(10, _as_int(watch.get("lookup_retries"), 2))),
-        )
         return cfg
 
 

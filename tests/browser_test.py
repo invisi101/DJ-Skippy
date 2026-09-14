@@ -43,7 +43,7 @@ async def main() -> int:
     shutil.copy2(real[0].path, copied)
 
     cfg.web.enabled = cfg.mpris.enabled = False
-    cfg.visualiser.enabled = cfg.watcher.enabled = False
+    cfg.visualiser.enabled = False
     cfg.playback.resume = False
     cfg.playback.volume = 15
 
