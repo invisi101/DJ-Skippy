@@ -1,0 +1,14 @@
+# virtualenv (recreate with: python -m venv --system-site-packages .venv)
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# editors
+.vscode/
+.idea/
+*.swp

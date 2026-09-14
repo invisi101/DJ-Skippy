@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# DJ-Skippy launcher.
+#
+# Prefers the project virtualenv (which carries textual-image for sharp album
+# art via the kitty graphics protocol) and falls back to the system Python,
+# where DJ-Skippy still runs and draws art as true-colour half-blocks.
+
+set -euo pipefail
+
+# Resolve symlinks so a `DJ` symlink on PATH still finds the project.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+PROJECT_DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+VENV_PYTHON="$PROJECT_DIR/.venv/bin/python"
+if [ -x "$VENV_PYTHON" ]; then
+    PYTHON="$VENV_PYTHON"
+else
+    PYTHON="$(command -v python3 || command -v python)"
+fi
+
+cd "$PROJECT_DIR"
+exec "$PYTHON" -m djskippy "$@"
