@@ -69,6 +69,10 @@ class ListPane(Widget):
         #: What the count in the header is counting. "Playlist 12" read as
         #: the name of a playlist rather than a number of tracks.
         self.count_noun = "tracks"
+        #: What the header should say there are, when that is not simply the
+        #: number of rows — a "＋ New playlist…" row is not a playlist, and
+        #: six lines of explanatory text are not six tracks.
+        self.count_of: int | None = None
         self.items: list[str] = []
         self.meta: list[Any] = []
         self.cursor = 0
@@ -81,6 +85,9 @@ class ListPane(Widget):
     def set_items(self, items: Sequence[str], meta: Sequence[Any] | None = None) -> None:
         self.items = list(items)
         self.meta = list(meta) if meta is not None else list(items)
+        # Row count is the default meaning again until a caller says otherwise;
+        # panes are reused across views and a stale override outlives its view.
+        self.count_of = None
         self.cursor = min(self.cursor, max(0, len(self.items) - 1))
         self.scroll_top = 0
         self._clamp()
@@ -136,7 +143,8 @@ class ListPane(Widget):
         # afterwards, which turned every row of the focused pane blue.
         out = Text()
 
-        count = f"  ·  {len(self.items)} {self.count_noun}" if self.items else ""
+        total = len(self.items) if self.count_of is None else self.count_of
+        count = f"  ·  {total} {self.count_noun}" if total else ""
         out.append(
             f"{self.pane_title}{count}".ljust(width)[:width] + "\n",
             style="bold blue" if self.is_active else "bold bright_black",
@@ -998,6 +1006,11 @@ class DJSkippy(App):
             self._panes[2].count_noun = "lines"
             lines = HELP_TEXT.splitlines()
             self._panes[2].set_items(lines, lines)
+
+        # Switching view can move focus_column (Playlists starts in column 1).
+        # Without this the highlighted border stays on the pane the last view
+        # was using, so the keys act on one column while your eye is on another.
+        self._update_focus()
         columns.refresh()
 
     def _render_playlists(self, select: str | None = None) -> None:
@@ -1009,8 +1022,14 @@ class DJSkippy(App):
         infos = self.playlists.list()
         self._playlist_infos = infos
 
+        # The instruction has to live in the title. notify_status clears itself
+        # after six seconds, and a mode you are still sitting in with no visible
+        # way out is how "press p, nothing happened" happens.
         if self._pending_add:
-            title = f"Add {len(self._pending_add)} track(s) to…"
+            title = (
+                f"Add {len(self._pending_add)} track(s) to… "
+                "— enter adds · esc cancels"
+            )
         else:
             title = "Playlists — n new · d delete · r rename"
         self._panes[1].pane_title = title
@@ -1025,6 +1044,7 @@ class DJSkippy(App):
                     cursor = index
                     break
         self._panes[1].set_items(labels, meta)
+        self._panes[1].count_of = len(infos)   # the ＋ row is not a playlist
         self._panes[1].move_to(max(0, cursor))
         self._render_playlist_songs()
 
@@ -1033,6 +1053,16 @@ class DJSkippy(App):
         from .playlists import PlaylistInfo
 
         selected = self._panes[1].selected
+
+        # On the "＋ New playlist…" row while tracks are waiting: show what is
+        # waiting, so you can see the thing you are filing before you file it.
+        if selected is NEW_PLAYLIST and self._pending_add:
+            self._panes[2].pane_title = "Waiting to be added"
+            self._panes[2].count_noun = "tracks"
+            labels = [f"  {t.title}  —  {t.artist}" for t in self._pending_add]
+            self._panes[2].set_items(labels, list(self._pending_add))
+            return
+
         if not isinstance(selected, PlaylistInfo):
             self._panes[2].pane_title = "Songs"
             self._panes[2].count_noun = "tracks"
@@ -1046,6 +1076,7 @@ class DJSkippy(App):
                 "",
             ]
             self._panes[2].set_items(hint, [None] * len(hint))
+            self._panes[2].count_of = 0     # lines of advice, not tracks
             return
 
         tracks = self.playlists.load(selected.name, self.library)
@@ -1064,6 +1095,7 @@ class DJSkippy(App):
                      "  Go to the Library (1), find something you like,",
                      "  and press p to add it.", ""]
             self._panes[2].set_items(empty, [None] * len(empty))
+            self._panes[2].count_of = 0
 
     def _render_now_playing(self) -> None:
         """What is loaded and what jumps the queue, in one list."""
@@ -1682,8 +1714,21 @@ class DJSkippy(App):
             return
         self._pending_add = list(selection)
         self._set_view(View.PLAYLISTS)
-        if self._last_playlist:
-            self._render_playlists(select=self._last_playlist)
+
+        # With nothing to choose from, choosing is a pointless step: go
+        # straight to naming the playlist these tracks are about to start.
+        infos = self._playlist_infos
+        if not infos:
+            self._new_playlist_prompt()
+            return
+
+        # Land on a real playlist, never on the "＋ New playlist…" row.
+        # Pressing p and then enter has to add the track; sitting the cursor
+        # on the new-playlist row meant enter asked for a name instead, and
+        # the track went nowhere.
+        names = {i.name for i in infos}
+        target = self._last_playlist if self._last_playlist in names else infos[0].name
+        self._render_playlists(select=target)
         self.notify_status(
             f"choose a playlist for {len(selection)} track(s) — "
             "enter to add, esc to cancel"
