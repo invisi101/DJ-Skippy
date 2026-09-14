@@ -499,7 +499,7 @@ DJ-Skippy — keys
     X             re-check MusicBrainz and retry everything
     d             dismiss an entry
 
-  IMPORT & MAINTENANCE  (view 6 — you never need a beets command)
+  IMPORT & MAINTENANCE  (view 6)
     i             import every album on disk that is not in the library yet
     enter         tag just the highlighted folder, interactively
     d             find duplicates          M   albums with missing tracks
@@ -1677,7 +1677,7 @@ class DJSkippy(App):
 
         lines.extend([
             "",
-            "  MAINTENANCE  (no terminal required)",
+            "  MAINTENANCE",
             "    d  find duplicates        M  albums with missing tracks",
             "    f  fetch missing art      R  re-sync tags from MusicBrainz",
             "",
