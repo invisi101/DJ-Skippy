@@ -137,6 +137,16 @@ class Tagger:
             plugins.load_plugins()
             plugins.find_plugins()
 
+            # beets' incremental mode records every directory it has *seen*,
+            # skipped ones included, and never offers them again. That is
+            # wrong here: DJ-Skippy decides what needs importing by checking
+            # actual library membership, which is both more accurate and
+            # re-checkable. Left on, an album skipped once during a
+            # MusicBrainz outage could never be retried - 46 folders were
+            # stuck exactly that way.
+            beets_config["import"]["incremental"] = False
+            beets_config["import"]["incremental_skip_later"] = True
+
             lib = BeetsLibrary(
                 beets_config["library"].as_filename(),
                 beets_config["directory"].as_filename(),
