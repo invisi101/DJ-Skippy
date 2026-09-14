@@ -197,6 +197,43 @@ def main() -> int:
         check("missing folder handled", missing.track_count == 0
               and missing_folders == [])
 
+        print("\na broken config file does not stop it starting")
+        from djskippy.config import CONFIG_FILE, Config
+
+        saved = CONFIG_FILE.read_text() if CONFIG_FILE.exists() else None
+        cases = {
+            "invalid TOML": "this is not [valid toml {{{",
+            "wrong types": '[playback]\nvolume = "loud"\n'
+                           'rewind_offset = "soon"\nresume = "maybe"\n',
+            "bad choices": '[playback]\nreplaygain = 42\n'
+                           '[visualiser]\nbars = "many"\nframerate = -5\n',
+            "silly numbers": '[web]\nport = 999999\n'
+                             '[watcher]\nauto_threshold = -3\nlookup_retries = 900\n',
+            "empty file": "",
+        }
+        try:
+            for name, body in cases.items():
+                CONFIG_FILE.write_text(body)
+                try:
+                    loaded = Config.load()
+                    sane = (
+                        0 <= loaded.playback.volume <= 130
+                        and loaded.playback.replaygain in
+                            ("smart", "track", "album", "off")
+                        and 1 <= loaded.web.port <= 65535
+                        and 0 <= loaded.watcher.auto_threshold <= 101
+                    )
+                    check(f"{name} falls back to something sane", sane,
+                          f"vol={loaded.playback.volume} "
+                          f"rg={loaded.playback.replaygain} "
+                          f"port={loaded.web.port}")
+                except Exception as exc:
+                    check(f"{name} does not raise", False,
+                          f"{type(exc).__name__}: {exc}")
+        finally:
+            if saved is not None:
+                CONFIG_FILE.write_text(saved)
+
         print("\nthe app starts against a hostile library")
 
         async def boot() -> tuple[bool, str]:

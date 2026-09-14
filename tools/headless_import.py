@@ -43,11 +43,11 @@ async def main(minutes: float) -> int:
     app = DJSkippy(cfg)
     before = app.library.track_count
     todo = find_unimported_albums(cfg.library.music_dir, app.library)
-    print(f"[{stamp()}] library: {before} tracks")
+    print(f"[{stamp()}] library: {before} tracks", flush=True)
     print(f"[{stamp()}] to import: {len(todo)} albums, "
-          f"{sum(f.audio_count for f in todo)} tracks")
+          f"{sum(f.audio_count for f in todo)} tracks", flush=True)
     if not todo:
-        print(f"[{stamp()}] nothing to do")
+        print(f"[{stamp()}] nothing to do", flush=True)
         return 0
 
     deadline = time.time() + minutes * 60
@@ -59,7 +59,7 @@ async def main(minutes: float) -> int:
         await asyncio.sleep(2)
 
         if not app.tagger.running:
-            print(f"[{stamp()}] import did not start: {app._status.message}")
+            print(f"[{stamp()}] import did not start: {app._status.message}", flush=True)
             return 1
 
         while app.tagger.running and time.time() < deadline:
@@ -77,7 +77,7 @@ async def main(minutes: float) -> int:
                 )
 
         if app.tagger.running:
-            print(f"[{stamp()}] time limit reached, stopping cleanly")
+            print(f"[{stamp()}] time limit reached, stopping cleanly", flush=True)
             app.tagger.abort()
             await asyncio.sleep(3)
 
@@ -85,7 +85,7 @@ async def main(minutes: float) -> int:
         print(f"[{stamp()}] finished: tagged {stats['imported']}, "
               f"as-is {stats['asis']}, skipped {stats['skipped']}, "
               f"retried {stats['retried']}")
-        print(f"[{stamp()}] review queue: {len(app.review_queue)}")
+        print(f"[{stamp()}] review queue: {len(app.review_queue)}", flush=True)
         for item in app.review_queue[:40]:
             print(f"           {item.kind:<9} {item.display_name}  — {item.reason}")
 
