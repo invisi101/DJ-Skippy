@@ -130,6 +130,24 @@ class Library:
                 return []
 
             directory = beets_config["directory"].as_filename()
+
+            # The beets database describes *its* directory and nothing else.
+            # Using it for any other folder means --music-dir is silently
+            # ignored and pointing DJ-Skippy at a USB drive shows the wrong
+            # library entirely.
+            try:
+                same = os.path.samefile(directory, self.music_dir)
+            except OSError:
+                same = os.path.normpath(directory) == os.path.normpath(
+                    str(self.music_dir)
+                )
+            if not same:
+                self.error = (
+                    f"beets manages {directory}, not {self.music_dir} — "
+                    "scanning the folder directly"
+                )
+                return []
+
             self._beets_lib = BeetsLibrary(db_path, directory)
 
             tracks: list[Track] = []
@@ -213,6 +231,17 @@ class Library:
                 except Exception:
                     pass
 
+            # Untagged files are common outside a managed library - a USB
+            # stick, a download. Artist/Album/Track is the near-universal
+            # layout, so read the structure rather than filing everything
+            # under "Unknown Artist" and making the browser useless.
+            if artist == "Unknown Artist" or album == "Unknown Album":
+                inferred_artist, inferred_album = self._infer_from_path(path)
+                if artist == "Unknown Artist" and inferred_artist:
+                    artist = inferred_artist
+                if album == "Unknown Album" and inferred_album:
+                    album = inferred_album
+
             tracks.append(
                 Track(
                     id=next_id,
@@ -231,6 +260,30 @@ class Library:
             )
             next_id += 1
         return tracks
+
+    def _infer_from_path(self, path: Path) -> tuple[str, str]:
+        """Guess (artist, album) from where a file sits.
+
+        Expects .../Artist/Album/track. A disc folder is stepped over, so
+        .../Artist/Album/CD1/track still reports the album rather than "CD1".
+        """
+        try:
+            relative = path.relative_to(self.music_dir)
+        except ValueError:
+            return "", ""
+
+        parts = list(relative.parts[:-1])  # drop the filename
+        if not parts:
+            return "", ""
+
+        from .maintenance import is_disc_folder
+
+        while len(parts) > 1 and is_disc_folder(Path(parts[-1])):
+            parts.pop()
+
+        if len(parts) >= 2:
+            return parts[-2], parts[-1]
+        return "", parts[-1]
 
     # -- indexing --------------------------------------------------------
 

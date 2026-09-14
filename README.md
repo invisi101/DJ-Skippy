@@ -192,10 +192,16 @@ track.
 
 DJ-Skippy has two backends and picks automatically:
 
-1. **beets** — if `~/.config/beets/library.db` exists and has tracks in it.
-   This is preferred because it holds proper MusicBrainz metadata.
-2. **Filesystem scan** — reads tags directly with mutagen. Slower and dumber,
-   but it means DJ-Skippy is useful on a folder of untagged files.
+1. **beets** — when `music_dir` is the folder beets manages and its database
+   has tracks in it. Preferred, because it holds proper MusicBrainz metadata.
+2. **Filesystem scan** — reads tags directly with mutagen. Used for any other
+   folder, so `--music-dir /mnt/usb` shows that drive rather than your beets
+   library, and DJ-Skippy is useful on untagged music.
+
+For files with no tags at all, the folder layout is read instead:
+`Artist/Album/track.flac` gives you a browsable library from nothing. Disc
+folders are stepped over, so `Artist/Album/CD2/track.flac` still reports the
+album rather than "CD2".
 
 The status line tells you which is in use. `:reload` rescans.
 
@@ -669,6 +675,9 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/playlist_test.py  # playlist create/load/rename/delete
 ./.venv/bin/python tests/review_test.py    # review guidance and retry logic
 ./.venv/bin/python tests/browser_test.py   # playing files outside the library
+./.venv/bin/python tests/multidisc_test.py # grouping discs into albums
+./.venv/bin/python tests/robustness_test.py # hostile filesystems
+./.venv/bin/python tests/equivalence_test.py # behaves as beets does
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL
 ./.venv/bin/python tests/integration.py    # real audio, cava, web, D-Bus
 ```
