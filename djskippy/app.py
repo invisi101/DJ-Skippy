@@ -1657,6 +1657,11 @@ class DJSkippy(App):
         if self.tagger.running:
             lines.append(f"  ▸ IMPORTING — {self.tagger.current_album}")
             lines.append(f"    {self.tagger.progress}")
+            if self.review_queue:
+                lines.append(
+                    f"    {len(self.review_queue)} need you — press 5 to see "
+                    "which, and why"
+                )
             lines.append("")
             lines.append("    Leave it running; it is slow because MusicBrainz")
             lines.append("    rate-limits to one lookup every few seconds.")
@@ -2186,6 +2191,10 @@ class DJSkippy(App):
         stats = self.tagger.stats
         self.library.load()
         self._set_view(View.LIBRARY)
-        self.notify_status(
-            f"tagged {stats['imported']} · as-is {stats['asis']} · skipped {stats['skipped']}"
+        message = (
+            f"tagged {stats['imported']} · as-is {stats['asis']} · "
+            f"skipped {stats['skipped']}"
         )
+        if self.review_queue:
+            message += f" — press 5 to see the {len(self.review_queue)} waiting"
+        self.notify_status(message)
