@@ -20,7 +20,7 @@ it is in the library.
 ▂▅▇▃▂▆█▅▃▁▄▇▆▂▅█▃▁▄▆▇▃▂▅▆█▄▂▁▃▅▇▆▄▂▁▃▅▇█▆▄▂▁▃▄▆▇▅▃▁▂▄
 ▶ The Old Main Drag — The Pogues (FLAC)
   1:12 ━━━━━━━━╸───────────────── 3:32   vol 80%  shuffle
- 1:Library 2:Playlist 3:Queue 4:Browser 5:Help
+ 1:Library 2:Playlists 3:Now playing 4:Browser 5:Help
    enter play  space pause  v stop  b/z next/prev  ? help  q quit
 ```
 
@@ -86,8 +86,8 @@ remove or retag a file and it is picked up automatically.
 | Key | View |
 |---|---|
 | `1` | Library — the three-column browser |
-| `2` | Playlist — what plays through in order |
-| `3` | Queue — jumps ahead of the playlist |
+| `2` | Playlists — your saved collections |
+| `3` | Now playing — what is loaded, and what jumps ahead |
 | `4` | Browser — play anything on disk |
 | `5` | Help |
 
@@ -108,64 +108,41 @@ right one.
 
 ### Playlists
 
-| Key | Action |
-|---|---|
-| `a` | append the selection to the playlist |
-| `e` | enqueue — plays next, ahead of the playlist |
-| `S` | name and save the current playlist |
-| `L` | browse saved playlists (`d` delete, `r` rename) |
-| `p` | add the selection straight to a named playlist |
-| `d` | remove from playlist / clear queue |
+A playlist is a collection you name and keep — favourites, a mood, a road
+trip. Press **`2`** to see yours.
 
-On an **artist** that means every album; on an **album**, the whole album; on a
-**track**, just that track.
+**To build one**, from anywhere in the Library:
 
-### Toggles
+1. Put the cursor on a track, an album, or an artist
+2. Press **`p`**
+3. Type a name
 
-| Key | Action |
-|---|---|
-| `V` | visualiser · `w` web player · `?` help · `q` quit |
+That is it — created and saved. Press `p` on anything else and the name is
+already filled in, so adding more is a keypress and Enter. It works at any
+level: one track, a whole album, or everything by an artist.
 
----
-
-## The library
-
-Everything under your music folder, read with mutagen. Where a file has no
-useful tags the folder layout is used instead — `Artist/Album/track` — so even
-untagged music is browsable. Disc folders are stepped over, so
-`Artist/Album/CD2/track` still reports the album rather than "CD2".
-
-Artists sort under their real name: "The Pogues" files under P. Albums sort
-oldest first.
-
-`:reload` rescans.
-
----
-
-## Playlists
+**In view `2`:** `Enter` plays a playlist, `d` deletes it, `r` renames it.
 
 Saved as **M3U8** in `~/.local/share/dj-skippy/playlists/`, so mpv, VLC and
 everything else can open them.
 
-**Build one:** navigate to an album or artist, press **`a`** to append, repeat
-as often as you like, then **`S`** and give it a name.
+---
 
-**Add to an existing one without loading it:** put the cursor on anything and
-press **`p`**, then type the name. Created if it does not exist; nothing is
-duplicated.
+## Now playing (`3`)
 
-**Manage:** **`L`** lists them, **`Enter`** plays one, **`d`** deletes, **`r`**
-renames. Or `:save`, `:load`, `:addto`, `:rename`, `:rm`, `:playlists`.
+What is currently loaded and playing through — the album you started, or a
+playlist you opened. Anything you have queued with `e` is listed at the top
+under "playing next", ahead of the rest.
 
-### Playlist vs. queue
+| Key | Action |
+|---|---|
+| `a` | add the selection to what is loaded |
+| `e` | play next, ahead of everything already loaded |
+| `d` | remove the highlighted track |
+| `S` | save what is loaded as a new playlist |
 
-The best idea cmus ever had:
-
-- The **playlist** (`2`) is what you are listening to, in order.
-- The **queue** (`3`) is what you want to hear *next*. Queued tracks jump the
-  line, and once it empties the playlist resumes where it was.
-
-`a` adds to the playlist. `e` adds to the queue.
+Pressing `Enter` on a track in the Library loads that whole album here, which
+is what makes the rest of the album play after the track you picked.
 
 ---
 

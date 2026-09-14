@@ -79,7 +79,7 @@ async def main() -> int:
               list(app._panes[1].items) != first_albums or len(first_albums) == 0)
 
         print("\nviews")
-        for key, view in (("2", View.PLAYLIST), ("3", View.QUEUE),
+        for key, view in (("2", View.PLAYLISTS), ("3", View.PLAYING),
                           ("4", View.BROWSER), ("5", View.HELP),
                           ("1", View.LIBRARY)):
             await pilot.press(key)
