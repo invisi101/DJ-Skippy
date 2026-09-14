@@ -747,6 +747,11 @@ class DJSkippy(App):
         )
         if self.web.start():
             self._update_services()
+            if self.web.moved_from is not None:
+                self.notify_status(
+                    f"port {self.web.moved_from} was taken — web player is on "
+                    f"{self.web.url}"
+                )
         else:
             self.notify_status(f"web player failed: {self.web.error}")
 

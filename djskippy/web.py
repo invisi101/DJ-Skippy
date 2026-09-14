@@ -192,6 +192,8 @@ class WebServer:
         self.port = port
         self.running = False
         self.error: str | None = None
+        #: Set when the configured port was taken and we moved off it.
+        self.moved_from: int | None = None
         self._thread: threading.Thread | None = None
         self._server = None
 
@@ -287,11 +289,54 @@ class WebServer:
 
         return app
 
+    @staticmethod
+    def _port_free(host: str, port: int) -> bool:
+        """Can we actually bind this port?"""
+        import socket
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((host, port))
+            return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
+
+    def _pick_port(self, attempts: int = 12) -> int | None:
+        """The configured port, or the next free one after it.
+
+        Probing first matters: werkzeug's make_server does not raise a
+        catchable error when the port is taken - it prints a message and
+        terminates the process. 8080 is contested enough (Docker, Jellyfin,
+        any number of dev servers) that a music player refusing to start
+        because of it would be absurd.
+        """
+        for offset in range(attempts):
+            candidate = self.port + offset
+            if candidate > 65535:
+                break
+            if self._port_free(self.host, candidate):
+                return candidate
+        return None
+
     def start(self) -> bool:
         if self.running:
             return True
         try:
             from werkzeug.serving import make_server
+
+            port = self._pick_port()
+            if port is None:
+                self.error = (
+                    f"ports {self.port}-{self.port + 11} are all in use"
+                )
+                self.running = False
+                return False
+            if port != self.port:
+                self.moved_from = self.port
+                self.port = port
 
             app = self._build_app()
             self._server = make_server(self.host, self.port, app, threaded=True)
