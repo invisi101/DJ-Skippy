@@ -273,6 +273,12 @@ tagged.
 The same operations exist as commands: `:import`, `:dup`, `:missing`,
 `:mbsync`, `:fetchart`, `:stats`.
 
+Only one library operation runs at a time, across every DJ-Skippy on the
+machine. Two beets processes on one SQLite database is how a library gets
+corrupted, so an import holds a lock that a second window, or a headless run,
+will respect — and will tell you who holds it rather than failing silently. A
+lock left behind by a process that died is taken over rather than blocking.
+
 **You should never need to type a `beet` command.** If you want to anyway,
 there is a full guide in [docs/BEETS.md](docs/BEETS.md).
 
@@ -689,6 +695,7 @@ Stale cava configs from an earlier hard kill are cleared on the next start.
 ./.venv/bin/python tests/multidisc_test.py # grouping discs into albums
 ./.venv/bin/python tests/playback_test.py  # advancing, skipping broken files
 ./.venv/bin/python tests/transport_test.py # next/prev/queue/shuffle/repeat
+./.venv/bin/python tests/locking_test.py   # one library operation at a time
 ./.venv/bin/python tests/robustness_test.py # hostile filesystems
 ./.venv/bin/python tests/equivalence_test.py # behaves as beets does
 ./.venv/bin/python tests/lifecycle_test.py # shutdown: SIGHUP / SIGTERM / SIGKILL

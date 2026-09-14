@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence, TYPE_CHECKING
 
+from . import locking
 from .library import AUDIO_SUFFIXES
 
 if TYPE_CHECKING:
@@ -354,6 +355,19 @@ class BeetsCommand:
 
     def _run(self, name: str, args: list[str]) -> None:
         result = CommandResult(name=name)
+        # mbsync, fetchart and write all modify the library; dup, missing and
+        # stats only read it, but sharing the lock keeps the rule simple.
+        if not locking.acquire(name):
+            result.error = (
+                f"another operation is running: {locking.describe_holder()}"
+            )
+            self.running = False
+            self.current = None
+            try:
+                self._on_done(result)
+            except Exception:
+                pass
+            return
         try:
             self._process = subprocess.Popen(
                 ["beet", *args],
@@ -376,6 +390,7 @@ class BeetsCommand:
         except Exception as exc:
             result.error = f"{type(exc).__name__}: {exc}"
         finally:
+            locking.release()
             self.running = False
             self.current = None
             self._process = None

@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import locking
+
 
 @dataclass
 class TrackChange:
@@ -127,6 +129,13 @@ class Tagger:
     # -- importer plumbing -----------------------------------------------
 
     def _run(self, paths: list[str]) -> None:
+        if not locking.acquire("import"):
+            self.error = (
+                f"another import is already running: {locking.describe_holder()}"
+            )
+            self._on_log(self.error)
+            self.running = False
+            return
         try:
             from beets import config as beets_config
             from beets import importer, plugins
@@ -164,6 +173,7 @@ class Tagger:
             self.error = f"{type(exc).__name__}: {exc}"
             self._on_log(f"tagger error: {self.error}")
         finally:
+            locking.release()
             self.running = False
             self.current = None
 
