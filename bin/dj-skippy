@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # DJ-Skippy launcher.
 #
-# Prefers the project virtualenv (which carries textual-image for sharp album
-# art via the kitty graphics protocol) and falls back to the system Python,
-# where DJ-Skippy still runs and draws art as true-colour half-blocks.
+# Prefers the project virtualenv when there is one and falls back to the
+# system Python otherwise; DJ-Skippy runs the same on either.
 
 set -euo pipefail
 
